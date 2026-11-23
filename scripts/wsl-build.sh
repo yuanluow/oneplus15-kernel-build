@@ -289,10 +289,28 @@ export KBUILD_BUILD_USER=kleaf
 export KBUILD_BUILD_HOST=build-host
 export SOURCE_DATE_EPOCH="$SRC_EPOCH"
 [ -n "$BUILD_TIMESTAMP" ] && export KBUILD_BUILD_TIMESTAMP="$BUILD_TIMESTAMP"
+# Google 官方(kleaf)用 gendwarfksyms --stable 算符号 CRC(会处理 ANDROID_KABI_* 标记)。
+# 不开的话 CRC 和原厂对不上,厂商驱动模块全部加载失败,开机卡第一屏。
+export KBUILD_GENDWARFKSYMS_STABLE=1
+# 以前没开 --stable 编过的旧产物,CRC 不会自动重算,必须清掉重编
+if [ -d out ] && [ ! -f out/.gendwarfksyms_stable ]; then
+  echo "检测到旧的编译产物(未开 --stable),清理后重新编译"
+  make "${MAKE_ARGS[@]}" clean >/dev/null
+fi
 make "${MAKE_ARGS[@]}" -j"$JOBS" KCFLAGS="-Wno-error" Image
+touch out/.gendwarfksyms_stable
 test -f out/arch/arm64/boot/Image
 KREL="$(make -s "${MAKE_ARGS[@]}" kernelrelease)"
 echo "kernelrelease: $KREL"
+
+# 和原厂内核对比符号 CRC,对不上说明刷了也开不了机
+if [ -n "$STOCK_BOOT" ] && [ -f "$STOCK_BOOT" ]; then
+  group "校验符号 CRC(和原厂对比)"
+  python3 "$REPO_DIR/scripts/check_crc.py" out/vmlinux.symvers gki/aarch64/symbols "$STOCK_BOOT" \
+    || { echo "❌ 符号 CRC 和原厂不一致,这个内核刷进去会卡第一屏,不要刷"; exit 1; }
+else
+  echo "⚠️ 没给 STOCK_BOOT,没法校验 CRC,不能保证能开机"
+fi
 
 # ---------------------------------------------------------------- 打包
 group "打包"
