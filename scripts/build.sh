@@ -98,9 +98,16 @@ echo "SUSFS: $SUSFS_DESC"
 cp -v susfs/kernel_patches/fs/* common/fs/
 cp -v susfs/kernel_patches/include/linux/* common/include/linux/
 SUSFS_PATCH="$(ls susfs/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch)"
-if ! (cd common && patch -p1 --forward --no-backup-if-mismatch < "$WORK/$SUSFS_PATCH"); then
+(cd common && patch -p1 --forward --no-backup-if-mismatch < "$WORK/$SUSFS_PATCH") || true
+REJ="$(cd common && find . -name '*.rej' | sort)"
+if [ "$REJ" = "./fs/proc/task_mmu.c.rej" ]; then
+  # Known: OnePlus 6.12.58 task_mmu.c differs from upstream SUSFS target; port the SUS_MAP hunks
+  echo "::warning::SUSFS task_mmu.c hunks rejected, applying OnePlus port (scripts/fix_task_mmu.py)"
+  python3 -I "$REPO_DIR/scripts/fix_task_mmu.py" common/fs/proc/task_mmu.c
+  rm -f common/fs/proc/task_mmu.c.rej
+elif [ -n "$REJ" ]; then
   echo "::error::SUSFS kernel patch did not apply cleanly. Rejected hunks:"
-  find common -name '*.rej' -print -exec cat {} \;
+  (cd common && for f in $REJ; do echo "== $f"; cat "$f"; done)
   exit 1
 fi
 endgroup
