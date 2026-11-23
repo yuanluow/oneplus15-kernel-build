@@ -165,6 +165,13 @@ else
 fi
 endgroup
 
+# ---------------------------------------------------------------- built-in modules
+# fgetpriority (hide other app UIDs from getpriority/ioprio) and sg_unblock
+# (never load oplus_secure_guard_new), compiled in instead of KernelSU modules.
+group "Build in fgetpriority + vendor module block list"
+python3 -I "$REPO_DIR/scripts/builtin_mods.py" common "$REPO_DIR" "${BLOCK_MODULES-oplus_secure_guard_new}"
+endgroup
+
 # ---------------------------------------------------------------- Baseband-guard
 group "Add Baseband-guard"
 (cd common && curl -LSs "https://raw.githubusercontent.com/vc-teahouse/Baseband-guard/main/setup.sh" | bash -s ${BBG_REF:+"$BBG_REF"})
@@ -298,6 +305,8 @@ SUSFS           : simonpunk/susfs4ksu $SUSFS_REF ($SUSFS_DESC)
 NoMount         : $NOMOUNT_DESC
 OverlayFS       : CONFIG_OVERLAY_FS=y (built-in)
 Baseband-guard  : ${BBG_REF:-main}
+Built in        : unicode bypass fix, fgetpriority
+Blocked modules : ${BLOCK_MODULES-oplus_secure_guard_new}
 clang           : $(clang --version | head -n1)
 rustc           : $(rustc --version)
 boot.img        : $BOOT_DESC
