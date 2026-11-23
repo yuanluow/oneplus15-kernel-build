@@ -63,21 +63,15 @@ boot.img 是拿原厂 boot.img 用 magiskboot 只换内核重新打包的，头�
 ```bash
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync aria2 \
+  bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
   libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch ca-certificates make gcc
 ```
 
-- `libdw-dev` 不能漏（编译主机工具 gendwarfksyms 需要它的 `dwarf.h`）。
-- `aria2` 强烈建议装：**解决下载慢的关键**。见下方「下载慢怎么办」。
+`libdw-dev` 不能漏（编译主机工具 gendwarfksyms 需要它的 `dwarf.h`）。
 
-### 下载慢怎么办（1Gbps 却只有几 MB/s）
+### 关于下载慢
 
-原因是 GitHub / CodeLinaro 对**单个连接**限速，`git clone`、`curl` 都是单线程，宽带再大也只跑一条连接。脚本已做两处优化：
-
-1. **多线程下载**：装了 `aria2` 后，1GB 多的工具链用 16 个连接并行下，能把千兆带宽跑满，几 MB/s → 几十 MB/s。没装会自动退回单线程 curl。
-2. **共享缓存**：工具链、SUSFS、AnyKernel3、magiskboot 都存到 `work/_cache`，**只下一次**。编 `both` 时 A、B 共用（不再各下一遍），之后重复编也直接复用。只有各方案的内核源码是独立的。
-
-所以慢的只有第一次，而且装了 aria2 后第一次也快。想重新全新下载就删掉 `work/_cache`。
+工具链(约 1GB)从 CodeLinaro 下,速度由对方服务器决定,几 MB/s 是它的限速,换多线程下载器也快不了,所以脚本就用默认 curl。能省时间的是**共享缓存**:工具链、SUSFS、AnyKernel3、magiskboot 都存到 `work/_cache`,**同一个文件只下一次**——编 `both` 时 A、B 共用,之后重复编也直接复用,所以慢的只有第一次。想全新重下就删掉 `work/_cache`。
 
 **2. 把仓库放到 WSL 的 Linux 目录**（不要放 `/mnt/c`，否则软链接和权限会出问题）
 
