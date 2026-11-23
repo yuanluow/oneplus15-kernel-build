@@ -192,7 +192,7 @@ endgroup
 
 # ---------------------------------------------------------------- build
 group "Build Image"
-export KBUILD_BUILD_USER=build-user
+export KBUILD_BUILD_USER=kleaf   # stock banner: kleaf@build-host
 export KBUILD_BUILD_HOST=build-host
 export SOURCE_DATE_EPOCH="$SRC_EPOCH"
 if [ -n "$BUILD_TIMESTAMP" ]; then export KBUILD_BUILD_TIMESTAMP="$BUILD_TIMESTAMP"; fi
