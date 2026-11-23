@@ -217,12 +217,23 @@ export KBUILD_BUILD_USER=kleaf   # stock banner: kleaf@build-host
 export KBUILD_BUILD_HOST=build-host
 export SOURCE_DATE_EPOCH="$SRC_EPOCH"
 if [ -n "$BUILD_TIMESTAMP" ]; then export KBUILD_BUILD_TIMESTAMP="$BUILD_TIMESTAMP"; fi
+# Kleaf builds GKI with gendwarfksyms --stable (honours ANDROID_KABI_* rules).
+# Without it the symbol CRCs differ from stock and no vendor module loads.
+export KBUILD_GENDWARFKSYMS_STABLE=1
 make "${MAKE_ARGS[@]}" -j"$(nproc --all)" KCFLAGS="-Wno-error" Image 2>&1 | tee "$WORK/build.log"
 test -f out/arch/arm64/boot/Image
 KREL="$(make -s "${MAKE_ARGS[@]}" kernelrelease)"
 echo "kernelrelease: $KREL"
 case "$KREL" in *dirty*|*+) echo "::warning::kernelrelease looks modified: $KREL" ;; esac
 endgroup
+
+if [ -n "${STOCK_BOOT:-}" ] && [ -f "$STOCK_BOOT" ]; then
+  group "Check symbol CRCs against stock kernel"
+  python3 "$REPO_DIR/scripts/check_crc.py" out/vmlinux.symvers gki/aarch64/symbols "$STOCK_BOOT"
+  endgroup
+else
+  echo "::warning::No stock boot.img - symbol CRCs not checked against stock (boot is NOT verified)"
+fi
 
 # ---------------------------------------------------------------- package
 group "Package AnyKernel3"
