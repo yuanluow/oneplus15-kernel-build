@@ -88,9 +88,18 @@ KERNEL_RELEASE='6.12.58-android16-6-g925a103d123c-ab15898589-4k' \
 BUILD_TIMESTAMP='Mon Jul 20 17:37:05 UTC 2026' \
 STOCK_BOOT=~/boot_stock.img \
 ./scripts/wsl-build.sh
+
+# A、B 两套一次编完（和云端 both 一样，各用独立源码目录，产物都进 dist/）:
+SCHEME=both \
+KERNEL_RELEASE='6.12.58-android16-6-g925a103d123c-ab15898589-4k' \
+BUILD_TIMESTAMP='Mon Jul 20 17:37:05 UTC 2026' \
+STOCK_BOOT=~/boot_stock.img \
+./scripts/wsl-build.sh
 ```
 
-常用环境变量：`SCHEME`(A/B，必填)、`STOCK_BOOT`(原厂 boot.img 路径，给了才出 boot.img)、`KERNEL_RELEASE`/`BUILD_TIMESTAMP`(伪装版本号)、`SRC_OWNER`(用你 fork 的源码就填你的用户名)、`SUSFS_REF`(回退 v2.2.0 填 `f37930f374ef88de990d6abea0c67d0ea28c1edc`)、`JOBS`(并行度)。
+`SCHEME=both` 会先编 A 再编 B，两套各占一个 `work/scheme-A`、`work/scheme-B` 目录（互不干扰），所以磁盘占用翻倍（约 50GB），你 i9+32G+NVMe 跑满核两套大概 15 分钟内。
+
+常用环境变量：`SCHEME`(A/B/both，必填)、`STOCK_BOOT`(原厂 boot.img 路径，给了才出 boot.img)、`KERNEL_RELEASE`/`BUILD_TIMESTAMP`(伪装版本号)、`SRC_OWNER`(用你 fork 的源码就填你的用户名)、`SUSFS_REF`(回退 v2.2.0 填 `f37930f374ef88de990d6abea0c67d0ea28c1edc`)、`JOBS`(并行度)。
 
 产物同样在 `dist/`：`AnyKernel3_*.zip`、`boot_*.img`、`Image_*`、`build-info.txt`。第一次会下约 1.5GB 工具链、占约 25GB 磁盘。重复跑脚本会复用已下载的工具链和源码（要全新来就删掉 `work/`）。
 
