@@ -9,11 +9,14 @@ on:
         options: [both, A, B]
         default: both
       ksu_ref:
-        description: "tiann/KernelSU commit or tag (default = the commit SUSFS f37930f was synced with)"
-        default: "953b403ab5ea2c1d866f72f6a7e67ce9224b8932"
+        description: "tiann/KernelSU branch/tag/commit (main = latest; auto-falls back to the SUSFS sync point if the SUSFS patch does not apply)"
+        default: "main"
       susfs_ref:
-        description: "susfs4ksu commit (v2.2.0 = f37930f)"
-        default: "f37930f374ef88de990d6abea0c67d0ea28c1edc"
+        description: "susfs4ksu branch/commit (gki-android16-6.12 = latest; v2.2.0 = f37930f374ef88de990d6abea0c67d0ea28c1edc)"
+        default: "gki-android16-6.12"
+      nomount_ref:
+        description: "NoMount tag/commit for scheme A (empty = latest tag)"
+        default: ""
       bbg_ref:
         description: "Baseband-guard commit or tag (empty = main)"
         default: ""
@@ -60,6 +63,7 @@ jobs:
           KSU_REF: ${{ inputs.ksu_ref }}
           SUSFS_REF: ${{ inputs.susfs_ref }}
           BBG_REF: ${{ inputs.bbg_ref }}
+          NOMOUNT_REF: ${{ inputs.nomount_ref }}
           KERNEL_RELEASE: ${{ inputs.kernel_release }}
           BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
         run: bash scripts/build.sh
