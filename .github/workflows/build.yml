@@ -121,21 +121,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(artifacts/boot_*.img artifacts/AnyKernel3_*.zip artifacts/Image_* artifacts/build-info_*.txt artifacts/kernel_*.config)
-          if ! ls artifacts/Image_* >/dev/null 2>&1; then
-            echo "::error::No scheme built successfully, nothing to release"; exit 1
+          # A build-info file is written ONLY after that scheme's Image is produced,
+          # so its presence means that scheme compiled successfully. Release only those.
+          ok_schemes=""
+          files=()
+          for info in artifacts/build-info_scheme*.txt; do
+            s="$(sed -n 's/.*build-info_scheme\(.\)\.txt/\1/p' <<<"$info")"
+            img=(artifacts/Image_*scheme${s}_*)
+            [ -e "${img[0]:-/nonexistent}" ] || { echo "scheme $s: no Image, skipping"; continue; }
+            ok_schemes="$ok_schemes $s"
+            files+=(artifacts/boot_*scheme${s}_*.img artifacts/AnyKernel3_*scheme${s}_*.zip \
+                    artifacts/Image_*scheme${s}_* "$info" artifacts/kernel_scheme${s}.config)
+          done
+          if [ -z "$ok_schemes" ]; then
+            echo "::warning::No scheme compiled successfully — not creating a release."
+            exit 0
           fi
-          KREL="$(sed -n 's/^kernelrelease *: //p' artifacts/build-info_*.txt | head -n1)"
+          echo "Releasing schemes:$ok_schemes"
+          KREL="$(sed -n 's/^kernelrelease *: //p' artifacts/build-info_scheme*.txt | head -n1)"
           TAG="op15-$(date -u +%Y%m%d)-r${{ github.run_number }}"
           {
             echo "OnePlus 15 · Linux ${KREL}"
             echo
-            echo "- **Scheme A (NoMount)**: NoMount built in, SUSFS OPEN_REDIRECT off"
-            echo "- **Scheme B (OverlayFS)**: OverlayFS built in, SUSFS OPEN_REDIRECT on"
+            echo "编译成功并发布的方案:**$ok_schemes**（只发布实际编译成功的方案）"
+            case "$ok_schemes" in *A*) echo "- **方案 A (NoMount)**: NoMount 内置, SUSFS OPEN_REDIRECT 关";; esac
+            case "$ok_schemes" in *B*) echo "- **方案 B (OverlayFS)**: OverlayFS 内置, SUSFS OPEN_REDIRECT 开";; esac
             echo
-            echo "Files per scheme: \`boot_*.img\` (fastboot flash boot), \`AnyKernel3_*.zip\` (flash in manager/recovery), \`Image_*\` (raw kernel)."
-            echo "**Back up your stock boot.img before flashing.**"
-            for f in artifacts/build-info_*.txt; do
+            echo "每个方案的文件: \`boot_*.img\` (fastboot flash boot), \`AnyKernel3_*.zip\` (管理器/Recovery 卡刷), \`Image_*\` (单独内核)."
+            echo "**刷机前请备份原厂 boot.img。**"
+            for f in artifacts/build-info_scheme*.txt; do
               echo; echo '```'; cat "$f"; echo '```'
             done
           } > notes.md
