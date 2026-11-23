@@ -313,7 +313,11 @@ if [ -n "$STOCK_BOOT" ] && [ -f "$STOCK_BOOT" ]; then
   group "重新打包 boot.img"
   mkdir -p "$CACHE/mb" "$WORK/bootwork"
   if [ ! -x "$CACHE/mb/magiskboot" ]; then
-    dl "https://github.com/topjohnwu/Magisk/releases/latest/download/app-release.apk" "$CACHE/mb/magisk.apk"
+    # Magisk 的 Release 文件名带版本号(Magisk-v31.1.apk),先从 API 查出真实下载地址
+    MAGISK_URL="$(curl -fsSL https://api.github.com/repos/topjohnwu/Magisk/releases/latest \
+      | grep -o '"browser_download_url": *"[^"]*/Magisk-v[^"]*\.apk"' | head -n1 | sed 's/.*"\(https[^"]*\)"$/\1/')"
+    [ -n "$MAGISK_URL" ] || { echo "❌ 查不到 Magisk 最新版的下载地址"; exit 1; }
+    dl "$MAGISK_URL" "$CACHE/mb/magisk.apk"
     unzip -o "$CACHE/mb/magisk.apk" 'lib/x86_64/libmagiskboot.so' -d "$CACHE/mb" >/dev/null
     cp "$CACHE/mb/lib/x86_64/libmagiskboot.so" "$CACHE/mb/magiskboot"
     chmod +x "$CACHE/mb/magiskboot"
