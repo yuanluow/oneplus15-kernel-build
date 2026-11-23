@@ -6,9 +6,10 @@ set -euo pipefail
 
 : "${SCHEME:?SCHEME must be A or B}"
 : "${SRC_OWNER:=OnePlusOSS}"
-: "${KSU_REF:=953b403ab5ea2c1d866f72f6a7e67ce9224b8932}"
-: "${SUSFS_REF:=f37930f374ef88de990d6abea0c67d0ea28c1edc}"
+: "${KSU_REF:=main}"
+: "${SUSFS_REF:=gki-android16-6.12}"
 : "${BBG_REF:=}"
+: "${NOMOUNT_REF:=}"
 : "${KERNEL_RELEASE:=}"
 : "${BUILD_TIMESTAMP:=}"
 
@@ -92,6 +93,8 @@ endgroup
 group "Apply SUSFS ($SUSFS_REF)"
 retry git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs
 git -C susfs checkout -q "$SUSFS_REF"
+SUSFS_DESC="$(git -C susfs rev-parse --short HEAD), $(git -C susfs log -1 --format=%cs)"
+echo "SUSFS: $SUSFS_DESC"
 cp -v susfs/kernel_patches/fs/* common/fs/
 cp -v susfs/kernel_patches/include/linux/* common/include/linux/
 SUSFS_PATCH="$(ls susfs/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch)"
@@ -105,13 +108,30 @@ endgroup
 # ---------------------------------------------------------------- KernelSU
 group "Add KernelSU ($KSU_REF)"
 (cd common && curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "$KSU_REF")
-if ! (cd common/KernelSU && patch -p1 --forward --no-backup-if-mismatch < "$WORK/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"); then
-  echo "::error::SUSFS KernelSU patch did not apply. KSU_REF must match the KernelSU commit SUSFS was synced with."
-  find common/KernelSU -name '*.rej' -print -exec cat {} \;
-  exit 1
+KSU_PATCH="$WORK/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+ksu_patch_ok() { (cd common/KernelSU && patch -p1 --forward --dry-run -s < "$KSU_PATCH" >/dev/null); }
+if ! ksu_patch_ok; then
+  # Latest KernelSU moved past what SUSFS supports: fall back to the KernelSU commit SUSFS last synced with
+  SYNC_REF="$(git -C susfs log -n 100 --format=%B | grep -oP 'tiann/KernelSU/commit/\K[0-9a-f]{40}' | head -n1 || true)"
+  echo "::warning::SUSFS KernelSU patch does not apply on $KSU_REF, falling back to SUSFS sync point ${SYNC_REF:-<none>}"
+  [ -n "$SYNC_REF" ] || { echo "::error::no KernelSU sync point found in SUSFS history"; exit 1; }
+  git -C common/KernelSU checkout -q "$SYNC_REF"
+  ksu_patch_ok || { echo "::error::SUSFS KernelSU patch does not apply even on $SYNC_REF"; exit 1; }
 fi
-KSU_DESC="$(git -C common/KernelSU describe --tags --always)"
+(cd common/KernelSU && patch -p1 --forward --no-backup-if-mismatch < "$KSU_PATCH")
+KSU_DESC="$(git -C common/KernelSU describe --tags --always) ($(git -C common/KernelSU rev-parse --short HEAD), $(git -C common/KernelSU log -1 --format=%cs))"
+echo "KernelSU: $KSU_DESC"
 endgroup
+
+# ---------------------------------------------------------------- NoMount (scheme A, built in)
+NOMOUNT_DESC="not included"
+if [ "$SCHEME" = A ]; then
+  group "Add NoMount (built-in)"
+  (cd common && curl -LSs "https://raw.githubusercontent.com/maxsteeel/nomount/master/kernel/setup.sh" | bash -s ${NOMOUNT_REF:+"$NOMOUNT_REF"})
+  NOMOUNT_DESC="$(git -C common/NoMount describe --tags --always) (built-in)"
+  echo "NoMount: $NOMOUNT_DESC"
+  endgroup
+fi
 
 # ---------------------------------------------------------------- Baseband-guard
 group "Add Baseband-guard"
@@ -152,9 +172,13 @@ for o in KSU KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTA
          KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS BBG TCP_CONG_BBR DEFAULT_BBR \
          NETFILTER_XT_TARGET_HL IP_NF_TARGET_TTL IP6_NF_TARGET_HL \
          IP_SET IP_SET_HASH_IP IP_SET_HASH_NET IP_SET_HASH_IPPORT IP_SET_BITMAP_IP NETFILTER_XT_SET \
-         CFI_CLANG SHADOW_CALL_STACK; do need_y "$o"; done
+         OVERLAY_FS CFI_CLANG SHADOW_CALL_STACK; do need_y "$o"; done
 need_n KSU_SUSFS_ENABLE_LOG
-if [ "$SCHEME" = A ]; then need_n KSU_SUSFS_OPEN_REDIRECT; else need_y KSU_SUSFS_OPEN_REDIRECT; fi
+if [ "$SCHEME" = A ]; then
+  need_n KSU_SUSFS_OPEN_REDIRECT; need_y NOMOUNT
+else
+  need_y KSU_SUSFS_OPEN_REDIRECT
+fi
 grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' out/.config || { echo "::error::default TCP congestion is not bbr"; fail=1; }
 grep -q 'baseband_guard' <(grep '^CONFIG_LSM=' out/.config) || { echo "::error::baseband_guard missing from CONFIG_LSM"; fail=1; }
 [ $fail -eq 0 ] || exit 1
@@ -196,7 +220,9 @@ kernelrelease   : $KREL
 source          : $SRC_OWNER/android_kernel_common_oneplus_sm8850 @ $SRC_COMMIT
 source commit   : $SRC_SUBJECT
 KernelSU        : tiann/KernelSU $KSU_REF ($KSU_DESC)
-SUSFS           : simonpunk/susfs4ksu $SUSFS_REF
+SUSFS           : simonpunk/susfs4ksu $SUSFS_REF ($SUSFS_DESC)
+NoMount         : $NOMOUNT_DESC
+OverlayFS       : CONFIG_OVERLAY_FS=y (built-in)
 Baseband-guard  : ${BBG_REF:-main}
 clang           : $(clang --version | head -n1)
 rustc           : $(rustc --version)
