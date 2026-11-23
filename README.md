@@ -2,6 +2,7 @@
 
 底座：一加官方 6.12.58 源码（`oneplus/sm8850_b_16.0.0_oneplus_15`，16.0.10.601 同步）
 组件：KernelSU 官方最新 main + SUSFS 最新（`gki-android16-6.12` 分支）+ Baseband-guard + TTL + IP_SET + BBR 默认开启 + Unicode 绕过修复（`patches/unicode_bypass_fix.patch`，挡住零宽字符探测 `/sdcard/Android/data` 里被隐藏的应用）
+内置模块：**fgetpriority**（应用无法通过 getpriority/setpriority/ioprio 探测其他应用的 UID，配合 HMA 用）、**屏蔽 `oplus_secure_guard_new`**（等同 sg_unblock，内核直接拒绝加载它，解除它对 /data/adb 等目录二进制的执行拦截）。刷了本内核就**卸载 fgetpriority 和 sg_unblock 这两个 KSU 模块**。要屏蔽别的厂商模块，用环境变量 `BLOCK_MODULES=模块1,模块2`（WSL）。
 保持原厂：编译优化、ZRAM、CFI、SCS；只替换 boot 里的内核，不动 vendor_dlkm / system_dlkm。
 
 | | 方案 A：NoMount（隐蔽优先） | 方案 B：OverlayFS（稳定优先） |
