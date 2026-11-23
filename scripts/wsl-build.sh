@@ -228,6 +228,16 @@ elif [ "$SCHEME" = A ]; then
   NOMOUNT_DESC="$(git -C common/NoMount describe --tags --always) (built-in)"
 fi
 
+# ---------------------------------------------------------------- Unicode 绕过修复
+# 挡住零宽字符绕过(Duck Detector 的 Android/data ZWC / Ignorable CodePoint Bypass),
+# 否则 App 能看到被隐藏应用的 /sdcard/Android/data/<包名> 目录
+UNI_PATCH="$REPO_DIR/patches/unicode_bypass_fix.patch"
+if ! (cd common && patch -p1 -R --dry-run -s < "$UNI_PATCH" >/dev/null 2>&1); then
+  group "打 Unicode 绕过修复补丁"
+  (cd common && patch -p1 --forward --no-backup-if-mismatch < "$UNI_PATCH") \
+    || { echo "❌ Unicode 修复补丁打不上 (fs/unicode/utf8-norm.c)"; exit 1; }
+fi
+
 # ---------------------------------------------------------------- Baseband-guard
 if [ ! -d common/Baseband-guard ]; then
   group "加 Baseband-guard"
