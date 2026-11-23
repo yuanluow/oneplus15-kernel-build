@@ -152,6 +152,19 @@ if [ "$SCHEME" = A ]; then
   endgroup
 fi
 
+# ---------------------------------------------------------------- unicode bypass fix
+# Blocks the zero-width-character trick that lets apps see /sdcard/Android/data/<pkg>
+# of hidden apps (Duck Detector "Android/data ZWC / Ignorable CodePoint Bypass").
+group "Apply unicode bypass fix"
+UNI_PATCH="$REPO_DIR/patches/unicode_bypass_fix.patch"
+if (cd common && patch -p1 -R --dry-run -s < "$UNI_PATCH" >/dev/null 2>&1); then
+  echo "already applied"
+else
+  (cd common && patch -p1 --forward --no-backup-if-mismatch < "$UNI_PATCH") \
+    || { echo "::error::unicode bypass fix did not apply to fs/unicode/utf8-norm.c"; exit 1; }
+fi
+endgroup
+
 # ---------------------------------------------------------------- Baseband-guard
 group "Add Baseband-guard"
 (cd common && curl -LSs "https://raw.githubusercontent.com/vc-teahouse/Baseband-guard/main/setup.sh" | bash -s ${BBG_REF:+"$BBG_REF"})
