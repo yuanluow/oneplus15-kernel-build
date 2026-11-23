@@ -25,19 +25,39 @@
 
 工具链（clang r536225、rustc 1.82.0、bindgen）按一加 `kernel_manifest` 里 `oneplus_15.xml` 锁定的版本从 CodeLinaro 下载，和官方构建一致。
 
+## 准备原厂 boot.img（生成 boot.img 需要）
+
+boot.img 是拿原厂 boot.img 用 magiskboot 只换内核重新打包的，头部、cmdline、安全补丁日期都保持原厂，和 Magisk 修补的方式一样。所以需要先给一份原厂 boot.img：
+
+1. 拿到和手机当前固件版本一致的 boot.img（从全量包 payload.bin 里解出来，或者有 root 时 `dd if=/dev/block/by-name/boot_a of=/sdcard/boot.img`，当前槽位是 b 就用 boot_b）
+2. 仓库页面 → **Releases** → **Draft a new release**，tag 填 `stock-boot`，把文件命名为 `boot.img` 上传，发布
+3. 以后升级固件，就把这个 release 里的 boot.img 换成新版本的
+
+也可以在运行时用 `stock_boot_url` 直接填一个下载链接。没有原厂 boot.img 时照样编译，只是不出 boot.img。
+
 ## 怎么编
 
 1. 仓库页面 → **Actions** → **Build OnePlus 15 kernel** → **Run workflow**
 2. `scheme` 选 `both`（两套都编）、`A` 或 `B`
-3. 可选：`kernel_release` 填手机原厂 `uname -r` 的结果，`build_timestamp` 填原厂 `uname -v` 里的时间，用来伪装版本号
-4. 等 1～2 小时，在运行结果页底部下载 `OP15-6.12.58-scheme-A` / `-B`
+3. `release` 默认勾选：编完自动发布到 **Releases**
+4. 可选：`kernel_release` 填手机原厂 `uname -r` 的结果，`build_timestamp` 填原厂 `uname -v` 里的时间，用来伪装版本号
+5. 等 1～2 小时，到 **Releases** 下载
 
-产物：`AnyKernel3_*.zip`（卡刷）、`Image`（自己用 magiskboot 打进 boot.img）、`kernel.config`、`build-info.txt`。
+每个方案发布的文件：
+
+| 文件 | 用途 |
+|---|---|
+| `boot_*.img` | `fastboot flash boot boot_*.img` 直接刷 |
+| `AnyKernel3_*.zip` | 管理器或第三方 Recovery 卡刷 |
+| `Image_*` | 单独的内核文件，自己打包用 |
+| `build-info_*.txt` / `kernel_*.config` | 版本信息和完整内核配置 |
+
+文件名里带 `schemeA` / `schemeB` 区分。Actions 运行页底部的 Artifacts 里也有同样的文件。
 
 ## 刷机
 
 1. **先备份原厂 boot.img**，准备好 `fastboot flash boot boot.img` 刷回
-2. 用 KernelSU 管理器或第三方 Recovery 刷 AnyKernel3 zip
+2. 二选一：`fastboot flash boot boot_*.img`，或者用 KernelSU 管理器 / 第三方 Recovery 刷 AnyKernel3 zip
 3. 第一次刷完不装模块，先确认：
    - 能开机，`uname -r` 正常
    - `cat /proc/sys/net/ipv4/tcp_congestion_control` 显示 `bbr`
