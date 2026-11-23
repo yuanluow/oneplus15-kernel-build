@@ -1,7 +1,7 @@
 # 一加 15 内核云编译（方案 A / B）
 
 底座：一加官方 6.12.58 源码（`oneplus/sm8850_b_16.0.0_oneplus_15`，16.0.10.601 同步）
-组件：KernelSU 官方最新 main + SUSFS 最新（`gki-android16-6.12` 分支）+ Baseband-guard + TTL + IP_SET + BBR 默认开启
+组件：KernelSU 官方最新 main + SUSFS 最新（`gki-android16-6.12` 分支）+ Baseband-guard + TTL + IP_SET + BBR 默认开启 + Unicode 绕过修复（`patches/unicode_bypass_fix.patch`，挡住零宽字符探测 `/sdcard/Android/data` 里被隐藏的应用）
 保持原厂：编译优化、ZRAM、CFI、SCS；只替换 boot 里的内核，不动 vendor_dlkm / system_dlkm。
 
 | | 方案 A：NoMount（隐蔽优先） | 方案 B：OverlayFS（稳定优先） |
