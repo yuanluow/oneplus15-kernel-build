@@ -212,9 +212,38 @@ cp "$REPO_DIR/ak3/anykernel.sh" ak3/anykernel.sh
 cp common/out/arch/arm64/boot/Image ak3/Image
 NAME="OP15_${KREL}_scheme${SCHEME}_$(date -u +%Y%m%d)"
 (cd ak3 && zip -qr9 "$DIST/AnyKernel3_$NAME.zip" .)
-cp common/out/arch/arm64/boot/Image "$DIST/Image"
-cp common/out/.config "$DIST/kernel.config"
-cat > "$DIST/build-info.txt" <<EOF
+cp common/out/arch/arm64/boot/Image "$DIST/Image_$NAME"
+cp common/out/.config "$DIST/kernel_scheme$SCHEME.config"
+endgroup
+
+# ---------------------------------------------------------------- boot.img (repack stock boot with the new kernel)
+BOOT_DESC="not built (no stock boot.img provided)"
+if [ -n "${STOCK_BOOT:-}" ] && [ -f "$STOCK_BOOT" ]; then
+  group "Repack boot.img"
+  mkdir -p "$WORK/mb" "$WORK/bootwork"
+  if [ ! -x "$WORK/mb/magiskboot" ]; then
+    gh release download -R topjohnwu/Magisk -p 'Magisk-v*.apk' -D "$WORK/mb" --clobber
+    unzip -p "$WORK"/mb/Magisk-v*.apk lib/x86_64/libmagiskboot.so > "$WORK/mb/magiskboot"
+    chmod +x "$WORK/mb/magiskboot"
+  fi
+  MB="$WORK/mb/magiskboot"
+  cd "$WORK/bootwork"
+  cp "$STOCK_BOOT" stock.img
+  "$MB" unpack -h stock.img 2>&1 | tee unpack.log
+  [ -f kernel ] || { echo "::error::stock boot.img has no kernel (wrong image? init_boot/vendor_boot do not work)"; exit 1; }
+  grep -E 'HEADER_VER|OS_VERSION|OS_PATCH_LEVEL|KERNEL_FMT|cmdline' unpack.log || true
+  cp "$WORK/common/out/arch/arm64/boot/Image" kernel
+  "$MB" repack stock.img new.img
+  cp new.img "$DIST/boot_$NAME.img"
+  BOOT_DESC="repacked from stock boot.img (sha256 $(sha256sum stock.img | cut -c1-16)...)"
+  cd "$WORK"
+  endgroup
+else
+  echo "::warning::No stock boot.img, skipping boot.img (AnyKernel3 zip and Image are still built)"
+fi
+
+group "Build info"
+cat > "$DIST/build-info_scheme$SCHEME.txt" <<EOF
 scheme          : $SCHEME ($([ "$SCHEME" = A ] && echo "NoMount, SUSFS OPEN_REDIRECT off" || echo "OverlayFS, SUSFS OPEN_REDIRECT on"))
 kernelrelease   : $KREL
 source          : $SRC_OWNER/android_kernel_common_oneplus_sm8850 @ $SRC_COMMIT
@@ -226,7 +255,8 @@ OverlayFS       : CONFIG_OVERLAY_FS=y (built-in)
 Baseband-guard  : ${BBG_REF:-main}
 clang           : $(clang --version | head -n1)
 rustc           : $(rustc --version)
-Image sha256    : $(sha256sum "$DIST/Image" | cut -d' ' -f1)
+boot.img        : $BOOT_DESC
+Image sha256    : $(sha256sum "$DIST/Image_$NAME" | cut -d' ' -f1)
 EOF
-cat "$DIST/build-info.txt"
+cat "$DIST/build-info_scheme$SCHEME.txt"
 endgroup
