@@ -238,6 +238,13 @@ if ! (cd common && patch -p1 -R --dry-run -s < "$UNI_PATCH" >/dev/null 2>&1); th
     || { echo "❌ Unicode 修复补丁打不上 (fs/unicode/utf8-norm.c)"; exit 1; }
 fi
 
+# ---------------------------------------------------------------- 内置模块
+# fgetpriority(对其他应用隐藏 UID 的 getpriority/ioprio 结果)和 sg_unblock
+# (不让 oplus_secure_guard_new 加载),直接编进内核,不再需要对应的 KSU 模块
+group "内置 fgetpriority + 屏蔽厂商模块"
+python3 -I "$REPO_DIR/scripts/builtin_mods.py" common "$REPO_DIR" "${BLOCK_MODULES-oplus_secure_guard_new}" \
+  || { echo "❌ 内置模块打不上"; exit 1; }
+
 # ---------------------------------------------------------------- Baseband-guard
 if [ ! -d common/Baseband-guard ]; then
   group "加 Baseband-guard"
@@ -370,6 +377,8 @@ KernelSU        : $KSU_DESC
 SUSFS           : $SUSFS_REF ($SUSFS_DESC)
 NoMount         : $NOMOUNT_DESC
 Baseband-guard  : ${BBG_REF:-main}
+Built in        : unicode bypass fix, fgetpriority
+Blocked modules : ${BLOCK_MODULES-oplus_secure_guard_new}
 boot.img        : $BOOT_DESC
 clang           : $(clang --version | head -n1)
 Image sha256    : $(sha256sum "$DIST/Image_$NAME" | cut -d' ' -f1)
