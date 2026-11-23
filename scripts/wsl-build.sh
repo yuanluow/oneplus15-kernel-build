@@ -11,10 +11,9 @@
 # 一次性安装依赖:
 #   sudo apt-get update
 #   sudo apt-get install -y --no-install-recommends \
-#     bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync aria2 \
+#     bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
 #     libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch ca-certificates \
 #     make gcc
-#   # aria2:多线程下载,解决单连接限速(1Gbps 却只有几 MB/s)。没装会退回单线程 curl。
 #   # 打包 boot.img 的 magiskboot 脚本会自动下载,无需手动装。
 #
 # ---- 用法 ----
@@ -92,18 +91,12 @@ case "$REPO_DIR" in /mnt/*) echo "❌ 请把仓库放到 WSL 的 Linux 目录(�
 group() { echo; echo "========== $* =========="; }
 retry() { local n=0; until "$@"; do n=$((n+1)); [ $n -ge 5 ] && return 1; echo "重试 $n: $*"; sleep $((n*5)); done; }
 
-# 大文件多线程下载:有 aria2c 就开 16 连接(解决 GitHub/CLO 单连接限速,1Gbps 也能跑满),
-# 没装就退回单线程 curl。强烈建议装 aria2(apt install aria2)。
+# 下载(默认 curl)。大文件慢主要是服务器端限速,换下载器也快不了。
+# 真正省时间的是下方的共享缓存:同一个文件只下一次。
 dl() { # url outfile
   local url="$1" out="$2"
   mkdir -p "$(dirname "$out")"
-  if command -v aria2c >/dev/null 2>&1; then
-    retry aria2c -x16 -s16 -k1M --file-allocation=none --console-log-level=warn \
-      --summary-interval=0 --allow-overwrite=true --auto-file-renaming=false \
-      -d "$(dirname "$out")" -o "$(basename "$out")" "$url"
-  else
-    retry curl -fL --retry 3 -o "$out" "$url"
-  fi
+  retry curl -fL --retry 3 -o "$out" "$url"
 }
 
 # ---------------------------------------------------------------- 源码
