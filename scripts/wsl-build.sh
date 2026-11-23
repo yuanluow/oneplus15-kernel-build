@@ -23,6 +23,8 @@
 #   SCHEME=A ./scripts/wsl-build.sh
 #   # 编方案 B,并把结果打进原厂 boot.img:
 #   SCHEME=B STOCK_BOOT=~/boot_stock.img ./scripts/wsl-build.sh
+#   # A、B 两套一次编完(各用独立源码目录,产物都进 dist/):
+#   SCHEME=both STOCK_BOOT=~/boot_stock.img ./scripts/wsl-build.sh
 #   # 伪装成原厂版本号(强烈建议,过版本号检测):
 #   SCHEME=A \
 #   KERNEL_RELEASE='6.12.58-android16-6-g925a103d123c-ab15898589-4k' \
@@ -46,7 +48,7 @@
 set -euo pipefail
 
 # -------- 参数(都可以用环境变量覆盖)--------
-: "${SCHEME:?必须指定 SCHEME=A 或 SCHEME=B}"
+: "${SCHEME:?必须指定 SCHEME=A、B 或 both}"
 : "${SRC_OWNER:=OnePlusOSS}"                 # 改成你的 GitHub 用户名可用你 fork 的源码
 : "${KSU_REF:=main}"                          # KernelSU 版本(main=最新)
 : "${SUSFS_REF:=gki-android16-6.12}"          # SUSFS 分支/提交(v2.2.0=f37930f374ef88de990d6abea0c67d0ea28c1edc)
@@ -57,15 +59,27 @@ set -euo pipefail
 : "${STOCK_BOOT:=}"                           # 原厂 boot.img 路径(空=不打包 boot.img)
 : "${JOBS:=$(nproc)}"                         # 并行度
 
-case "$SCHEME" in A|B) ;; *) echo "SCHEME 只能是 A 或 B"; exit 1 ;; esac
+case "$SCHEME" in A|B|both) ;; *) echo "SCHEME 只能是 A、B 或 both"; exit 1 ;; esac
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# SCHEME=both: 依次编 A 和 B(各用独立源码目录,互不干扰),产物都进同一个 dist/
+if [ "$SCHEME" = both ]; then
+  echo "==> 依次编译方案 A 和 B"
+  SCHEME=A "$0"
+  SCHEME=B "$0"
+  echo "==> A、B 两套都编完,产物在 $REPO_DIR/dist"
+  ls -la "$REPO_DIR/dist"
+  exit 0
+fi
 
 SRC_BRANCH="oneplus/sm8850_b_16.0.0_oneplus_15"
 MANIFEST_URL="https://raw.githubusercontent.com/OnePlusOSS/kernel_manifest/oneplus/sm8850/oneplus_15.xml"
 CLO="https://git.codelinaro.org/clo/la"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORK="$REPO_DIR/work"
+# 每个方案用独立的 work 目录,A 的 NoMount / 关 OPEN_REDIRECT 不会和 B 冲突
+WORK="$REPO_DIR/work/scheme-$SCHEME"
 DIST="$REPO_DIR/dist"
 mkdir -p "$WORK" "$DIST"
 
