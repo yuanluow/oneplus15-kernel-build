@@ -1,0 +1,73 @@
+name: Build OnePlus 15 kernel (A=NoMount / B=OverlayFS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      scheme:
+        description: "A = NoMount, B = OverlayFS, both = build both"
+        type: choice
+        options: [both, A, B]
+        default: both
+      ksu_ref:
+        description: "tiann/KernelSU commit or tag (default = the commit SUSFS f37930f was synced with)"
+        default: "953b403ab5ea2c1d866f72f6a7e67ce9224b8932"
+      susfs_ref:
+        description: "susfs4ksu commit (v2.2.0 = f37930f)"
+        default: "f37930f374ef88de990d6abea0c67d0ea28c1edc"
+      bbg_ref:
+        description: "Baseband-guard commit or tag (empty = main)"
+        default: ""
+      kernel_release:
+        description: "Optional: stock `uname -r` from your phone, e.g. 6.12.58-android16-6-o-gxxxxxxxxxxx-4k (empty = do not spoof)"
+        default: ""
+      build_timestamp:
+        description: "Optional: stock build time from `uname -v`, e.g. 'Tue Nov  4 08:00:00 UTC 2026'"
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Scheme ${{ matrix.scheme }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: ${{ fromJSON(inputs.scheme == 'both' && '["A","B"]' || format('["{0}"]', inputs.scheme)) }}
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
+            libssl-dev libelf-dev libncurses-dev dwarves patch
+
+      - name: Build
+        env:
+          SCHEME: ${{ matrix.scheme }}
+          SRC_OWNER: ${{ github.repository_owner }}
+          KSU_REF: ${{ inputs.ksu_ref }}
+          SUSFS_REF: ${{ inputs.susfs_ref }}
+          BBG_REF: ${{ inputs.bbg_ref }}
+          KERNEL_RELEASE: ${{ inputs.kernel_release }}
+          BUILD_TIMESTAMP: ${{ inputs.build_timestamp }}
+        run: bash scripts/build.sh
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OP15-6.12.58-scheme-${{ matrix.scheme }}
+          path: dist/
+          if-no-files-found: warn
