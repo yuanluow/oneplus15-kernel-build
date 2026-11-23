@@ -11,11 +11,11 @@
 # 一次性安装依赖:
 #   sudo apt-get update
 #   sudo apt-get install -y --no-install-recommends \
-#     bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
+#     bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync aria2 \
 #     libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch ca-certificates \
 #     make gcc
-#   # 打包 boot.img 用(可选,想直接刷 boot 时才需要):
-#   #   unzip 已装;脚本会自动下载 magiskboot,无需手动装
+#   # aria2:多线程下载,解决单连接限速(1Gbps 却只有几 MB/s)。没装会退回单线程 curl。
+#   # 打包 boot.img 的 magiskboot 脚本会自动下载,无需手动装。
 #
 # ---- 用法 ----
 #   chmod +x scripts/wsl-build.sh
@@ -81,13 +81,30 @@ CLO="https://git.codelinaro.org/clo/la"
 # 每个方案用独立的 work 目录,A 的 NoMount / 关 OPEN_REDIRECT 不会和 B 冲突
 WORK="$REPO_DIR/work/scheme-$SCHEME"
 DIST="$REPO_DIR/dist"
-mkdir -p "$WORK" "$DIST"
+# 所有方案共享的下载缓存:工具链/SUSFS/AnyKernel3/magiskboot 只下一次,
+# 编 both 或重复跑都复用,不会重复下 1GB 工具链
+CACHE="$REPO_DIR/work/_cache"
+mkdir -p "$WORK" "$DIST" "$CACHE"
 
 # 如果在 /mnt/ 下(Windows 盘)直接拒绝,避免软链接/权限坑
 case "$REPO_DIR" in /mnt/*) echo "❌ 请把仓库放到 WSL 的 Linux 目录(如 ~/op15),不要放在 /mnt/c 下。"; exit 1 ;; esac
 
 group() { echo; echo "========== $* =========="; }
 retry() { local n=0; until "$@"; do n=$((n+1)); [ $n -ge 5 ] && return 1; echo "重试 $n: $*"; sleep $((n*5)); done; }
+
+# 大文件多线程下载:有 aria2c 就开 16 连接(解决 GitHub/CLO 单连接限速,1Gbps 也能跑满),
+# 没装就退回单线程 curl。强烈建议装 aria2(apt install aria2)。
+dl() { # url outfile
+  local url="$1" out="$2"
+  mkdir -p "$(dirname "$out")"
+  if command -v aria2c >/dev/null 2>&1; then
+    retry aria2c -x16 -s16 -k1M --file-allocation=none --console-log-level=warn \
+      --summary-interval=0 --allow-overwrite=true --auto-file-renaming=false \
+      -d "$(dirname "$out")" -o "$(basename "$out")" "$url"
+  else
+    retry curl -fL --retry 3 -o "$out" "$url"
+  fi
+}
 
 # ---------------------------------------------------------------- 源码
 group "克隆内核源码"
@@ -113,13 +130,13 @@ echo "内核版本: $KVER"
 echo "CLANG_VERSION=$CLANG_VERSION RUSTC_VERSION=$RUSTC_VERSION"
 cd "$WORK"
 
-# ---------------------------------------------------------------- 工具链
-group "下载工具链(和一加官方同版本)"
-curl -fsSL --retry 5 "$MANIFEST_URL" -o manifest.xml
-rev_of() { python3 - "$1" <<'PY'
-import sys, xml.etree.ElementTree as ET
+# ---------------------------------------------------------------- 工具链(共享缓存)
+group "下载工具链(和一加官方同版本,存到共享缓存)"
+dl "$MANIFEST_URL" "$CACHE/manifest.xml"
+rev_of() { MANIFEST="$CACHE/manifest.xml" python3 - "$1" <<'PY'
+import sys, os, xml.etree.ElementTree as ET
 name = sys.argv[1]
-for p in ET.parse("manifest.xml").getroot().iter("project"):
+for p in ET.parse(os.environ["MANIFEST"]).getroot().iter("project"):
     if p.get("name") == name:
         print(p.get("revision")); break
 PY
@@ -132,19 +149,19 @@ TOOLS_REV="$(rev_of kernel_platform/prebuilts/clang-tools)"
 fetch_subdir() { # project rev subdir dest
   local proj="$1" rev="$2" sub="$3" dest="$4" name
   name="$(basename "$proj")"
-  [ -d "$dest" ] && { echo "已存在 $dest,跳过"; return 0; }
+  [ -d "$dest" ] && { echo "已缓存 $dest,跳过下载"; return 0; }
+  dl "$CLO/$proj/-/archive/$rev/$name-$rev.tar.gz?path=$sub" "$dest.tar.gz"
   mkdir -p "$dest"
-  retry curl -fL --retry 3 -o "$dest.tar.gz" "$CLO/$proj/-/archive/$rev/$name-$rev.tar.gz?path=$sub"
   tar -xzf "$dest.tar.gz" -C "$dest"
   rm -f "$dest.tar.gz"
 }
-fetch_subdir kernelplatform/prebuilts-master/clang/host/linux-x86 "$CLANG_REV" "clang-$CLANG_VERSION" tc-clang
-fetch_subdir kernel_platform/prebuilts/rust "$RUST_REV" "linux-x86/${RUSTC_VERSION%.p*}" tc-rust
-fetch_subdir kernel_platform/prebuilts/clang-tools "$TOOLS_REV" "linux-x86/bin" tc-tools
+fetch_subdir kernelplatform/prebuilts-master/clang/host/linux-x86 "$CLANG_REV" "clang-$CLANG_VERSION" "$CACHE/tc-clang"
+fetch_subdir kernel_platform/prebuilts/rust "$RUST_REV" "linux-x86/${RUSTC_VERSION%.p*}" "$CACHE/tc-rust"
+fetch_subdir kernel_platform/prebuilts/clang-tools "$TOOLS_REV" "linux-x86/bin" "$CACHE/tc-tools"
 
-CLANG_BIN="$(dirname "$(find "$WORK/tc-clang" -path '*/bin/clang' | head -n1)")"
-RUST_BIN="$(dirname "$(find "$WORK/tc-rust" -path '*/bin/rustc' | head -n1)")"
-BINDGEN_BIN="$(dirname "$(find "$WORK/tc-tools" -path '*/bin/bindgen' | head -n1)")"
+CLANG_BIN="$(dirname "$(find "$CACHE/tc-clang" -path '*/bin/clang' | head -n1)")"
+RUST_BIN="$(dirname "$(find "$CACHE/tc-rust" -path '*/bin/rustc' | head -n1)")"
+BINDGEN_BIN="$(dirname "$(find "$CACHE/tc-tools" -path '*/bin/bindgen' | head -n1)")"
 RUST_ROOT="$(dirname "$RUST_BIN")"
 chmod +x "$BINDGEN_BIN/bindgen" || true
 export PATH="$CLANG_BIN:$RUST_BIN:$BINDGEN_BIN:$PATH"
@@ -152,14 +169,15 @@ export LIBCLANG_PATH="$(dirname "$CLANG_BIN")/lib"
 clang --version | head -n1
 rustc --version
 
-# ---------------------------------------------------------------- SUSFS
+# ---------------------------------------------------------------- SUSFS(补丁源用共享缓存)
 group "打 SUSFS 补丁 ($SUSFS_REF)"
-[ -d susfs ] || retry git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs
-git -C susfs checkout -q "$SUSFS_REF"
-SUSFS_DESC="$(git -C susfs rev-parse --short HEAD), $(git -C susfs log -1 --format=%cs)"
-cp -v susfs/kernel_patches/fs/* common/fs/
-cp -v susfs/kernel_patches/include/linux/* common/include/linux/
-SUSFS_PATCH="$WORK/susfs/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch"
+[ -d "$CACHE/susfs" ] || retry git clone https://gitlab.com/simonpunk/susfs4ksu.git "$CACHE/susfs"
+git -C "$CACHE/susfs" fetch -q --all 2>/dev/null || true
+git -C "$CACHE/susfs" checkout -q "$SUSFS_REF"
+SUSFS_DESC="$(git -C "$CACHE/susfs" rev-parse --short HEAD), $(git -C "$CACHE/susfs" log -1 --format=%cs)"
+cp -v "$CACHE"/susfs/kernel_patches/fs/* common/fs/
+cp -v "$CACHE"/susfs/kernel_patches/include/linux/* common/include/linux/
+SUSFS_PATCH="$CACHE/susfs/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch"
 # 幂等:如果已经打过就跳过(重复跑脚本时)
 if grep -q 'CONFIG_KSU_SUSFS' common/fs/open.c 2>/dev/null; then
   echo "SUSFS 似乎已打过,跳过"
@@ -181,11 +199,11 @@ group "加 KernelSU ($KSU_REF)"
 if [ ! -d common/KernelSU ]; then
   (cd common && curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "$KSU_REF")
 fi
-KSU_PATCH="$WORK/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+KSU_PATCH="$CACHE/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 if ! grep -q 'KSU_SUSFS' common/KernelSU/kernel/Kconfig 2>/dev/null; then
   ksu_ok() { (cd common/KernelSU && patch -p1 --forward --dry-run -s < "$KSU_PATCH" >/dev/null); }
   if ! ksu_ok; then
-    SYNC_REF="$(git -C susfs log -n 100 --format=%B | grep -oP 'tiann/KernelSU/commit/\K[0-9a-f]{40}' | head -n1 || true)"
+    SYNC_REF="$(git -C "$CACHE/susfs" log -n 100 --format=%B | grep -oP 'tiann/KernelSU/commit/\K[0-9a-f]{40}' | head -n1 || true)"
     echo "⚠ 最新 KernelSU 补丁打不上,回退到 SUSFS 同步点 ${SYNC_REF:-<无>}"
     [ -n "$SYNC_REF" ] || { echo "❌ SUSFS 历史里找不到 KernelSU 同步点"; exit 1; }
     git -C common/KernelSU checkout -q "$SYNC_REF"
@@ -272,12 +290,13 @@ echo "kernelrelease: $KREL"
 # ---------------------------------------------------------------- 打包
 group "打包"
 cd "$WORK"
-[ -d ak3 ] || retry git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
-rm -rf ak3/.git ak3/.github ak3/README.md ak3/modules ak3/patch ak3/ramdisk
-cp "$REPO_DIR/ak3/anykernel.sh" ak3/anykernel.sh
-cp common/out/arch/arm64/boot/Image ak3/Image
+AK3="$CACHE/ak3"
+[ -d "$AK3" ] || retry git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git "$AK3"
+rm -rf "$AK3"/.git "$AK3"/.github "$AK3"/README.md "$AK3"/modules "$AK3"/patch "$AK3"/ramdisk
+cp "$REPO_DIR/ak3/anykernel.sh" "$AK3/anykernel.sh"
+cp common/out/arch/arm64/boot/Image "$AK3/Image"
 NAME="OP15_${KREL}_scheme${SCHEME}_$(date -u +%Y%m%d)"
-(cd ak3 && zip -qr9 "$DIST/AnyKernel3_$NAME.zip" .)
+(cd "$AK3" && zip -qr9 "$DIST/AnyKernel3_$NAME.zip" .)
 cp common/out/arch/arm64/boot/Image "$DIST/Image_$NAME"
 cp common/out/.config "$DIST/kernel_scheme$SCHEME.config"
 
@@ -285,15 +304,14 @@ cp common/out/.config "$DIST/kernel_scheme$SCHEME.config"
 BOOT_DESC="未生成(没给 STOCK_BOOT)"
 if [ -n "$STOCK_BOOT" ] && [ -f "$STOCK_BOOT" ]; then
   group "重新打包 boot.img"
-  mkdir -p "$WORK/mb" "$WORK/bootwork"
-  if [ ! -x "$WORK/mb/magiskboot" ]; then
-    retry curl -fL -o "$WORK/mb/magisk.apk" "https://github.com/topjohnwu/Magisk/releases/latest/download/app-release.apk" \
-      || retry curl -fL -o "$WORK/mb/magisk.apk" "$(curl -s https://api.github.com/repos/topjohnwu/Magisk/releases/latest | grep -oP 'https://[^"]+Magisk-v[^"]+\.apk' | head -n1)"
-    unzip -o "$WORK/mb/magisk.apk" 'lib/x86_64/libmagiskboot.so' -d "$WORK/mb" >/dev/null
-    cp "$WORK/mb/lib/x86_64/libmagiskboot.so" "$WORK/mb/magiskboot"
-    chmod +x "$WORK/mb/magiskboot"
+  mkdir -p "$CACHE/mb" "$WORK/bootwork"
+  if [ ! -x "$CACHE/mb/magiskboot" ]; then
+    dl "https://github.com/topjohnwu/Magisk/releases/latest/download/app-release.apk" "$CACHE/mb/magisk.apk"
+    unzip -o "$CACHE/mb/magisk.apk" 'lib/x86_64/libmagiskboot.so' -d "$CACHE/mb" >/dev/null
+    cp "$CACHE/mb/lib/x86_64/libmagiskboot.so" "$CACHE/mb/magiskboot"
+    chmod +x "$CACHE/mb/magiskboot"
   fi
-  MB="$WORK/mb/magiskboot"
+  MB="$CACHE/mb/magiskboot"
   cd "$WORK/bootwork"; rm -f kernel ramdisk.cpio* *.img
   cp "$STOCK_BOOT" stock.img
   "$MB" unpack stock.img
@@ -304,7 +322,7 @@ if [ -n "$STOCK_BOOT" ] && [ -f "$STOCK_BOOT" ]; then
   cd "$WORK"
 fi
 
-cat > "$DIST/build-info.txt" <<EOF
+cat > "$DIST/build-info_scheme$SCHEME.txt" <<EOF
 scheme          : $SCHEME ($([ "$SCHEME" = A ] && echo "NoMount 内置, SUSFS OPEN_REDIRECT 关" || echo "OverlayFS 内置, SUSFS OPEN_REDIRECT 开"))
 kernelrelease   : $KREL
 source          : $SRC_OWNER @ $SRC_COMMIT
