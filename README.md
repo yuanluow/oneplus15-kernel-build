@@ -54,6 +54,46 @@ boot.img 是拿原厂 boot.img 用 magiskboot 只换内核重新打包的，头�
 
 文件名里带 `schemeA` / `schemeB` 区分。Actions 运行页底部的 Artifacts 里也有同样的文件。
 
+## 本地编译（WSL，云端之外的另一种方式）
+
+云端 Actions 和本地 WSL 两种方式并存，用哪个都行，底座和组件完全一样。本地适合想自己改源码、或不想占用 Actions 时长。
+
+**1. 装 WSL 和依赖**（Ubuntu 22.04 / 24.04）
+
+```bash
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+  bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
+  libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch ca-certificates make gcc
+```
+
+`libdw-dev` 不能漏（编译主机工具 gendwarfksyms 需要它的 `dwarf.h`）。
+
+**2. 把仓库放到 WSL 的 Linux 目录**（不要放 `/mnt/c`，否则软链接和权限会出问题）
+
+```bash
+cd ~ && git clone https://github.com/yuanluow/oneplus15-kernel-build.git op15 && cd op15
+chmod +x scripts/wsl-build.sh
+```
+
+**3. 编译**
+
+```bash
+# 只编方案 A（NoMount）:
+SCHEME=A ./scripts/wsl-build.sh
+
+# 编方案 B，并伪装成原厂版本号、顺便打进 boot.img:
+SCHEME=B \
+KERNEL_RELEASE='6.12.58-android16-6-g925a103d123c-ab15898589-4k' \
+BUILD_TIMESTAMP='Mon Jul 20 17:37:05 UTC 2026' \
+STOCK_BOOT=~/boot_stock.img \
+./scripts/wsl-build.sh
+```
+
+常用环境变量：`SCHEME`(A/B，必填)、`STOCK_BOOT`(原厂 boot.img 路径，给了才出 boot.img)、`KERNEL_RELEASE`/`BUILD_TIMESTAMP`(伪装版本号)、`SRC_OWNER`(用你 fork 的源码就填你的用户名)、`SUSFS_REF`(回退 v2.2.0 填 `f37930f374ef88de990d6abea0c67d0ea28c1edc`)、`JOBS`(并行度)。
+
+产物同样在 `dist/`：`AnyKernel3_*.zip`、`boot_*.img`、`Image_*`、`build-info.txt`。第一次会下约 1.5GB 工具链、占约 25GB 磁盘。重复跑脚本会复用已下载的工具链和源码（要全新来就删掉 `work/`）。
+
 ## 刷机
 
 1. **先备份原厂 boot.img**，准备好 `fastboot flash boot boot.img` 刷回
