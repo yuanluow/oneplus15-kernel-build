@@ -97,6 +97,11 @@ SUSFS_DESC="$(git -C susfs rev-parse --short HEAD), $(git -C susfs log -1 --form
 echo "SUSFS: $SUSFS_DESC"
 cp -v susfs/kernel_patches/fs/* common/fs/
 cp -v susfs/kernel_patches/include/linux/* common/include/linux/
+# Upstream bug: with ENABLE_LOG off, susfs.c defines no SUSFS_LOGI_RL/SUSFS_LOGE_RL -> add empty ones
+if [ "$(grep -c 'define SUSFS_LOGI_RL' common/fs/susfs.c)" = 1 ]; then
+  sed -i 's/^#define SUSFS_LOGE(fmt, \.\.\.)[[:space:]]*$/&\n#define SUSFS_LOGI_RL(fmt, ...)\n#define SUSFS_LOGE_RL(fmt, ...)/' common/fs/susfs.c
+  [ "$(grep -c 'define SUSFS_LOGI_RL' common/fs/susfs.c)" = 2 ] || { echo "::error::could not add empty SUSFS_LOG*_RL macros"; exit 1; }
+fi
 SUSFS_PATCH="$(ls susfs/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch)"
 (cd common && patch -p1 --forward --no-backup-if-mismatch < "$WORK/$SUSFS_PATCH") || true
 REJ="$(cd common && find . -name '*.rej' | sort)"
@@ -128,6 +133,13 @@ fi
 (cd common/KernelSU && patch -p1 --forward --no-backup-if-mismatch < "$KSU_PATCH")
 KSU_DESC="$(git -C common/KernelSU describe --tags --always) ($(git -C common/KernelSU rev-parse --short HEAD), $(git -C common/KernelSU log -1 --format=%cs))"
 echo "KernelSU: $KSU_DESC"
+# On 6.10+ kbuild, $(src) already contains $(srctree) and srctree is ".." for O=out,
+# so KernelSU's "$(srctree)/$(src)" include dir is wrong (uapi/app_profile.h not found).
+# Pin it to the absolute in-tree path.
+if ! grep -q 'KSU_KERNEL_DIR := $(abspath $(srctree))/drivers/kernelsu' common/KernelSU/kernel/Kbuild; then
+  sed -i 's|^ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include|KSU_KERNEL_DIR := $(abspath $(srctree))/drivers/kernelsu\n&|' common/KernelSU/kernel/Kbuild
+  grep -q 'KSU_KERNEL_DIR := $(abspath $(srctree))/drivers/kernelsu' common/KernelSU/kernel/Kbuild || { echo "::error::could not fix KSU_KERNEL_DIR"; exit 1; }
+fi
 endgroup
 
 # ---------------------------------------------------------------- NoMount (scheme A, built in)
