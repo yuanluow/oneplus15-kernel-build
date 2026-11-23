@@ -8,6 +8,13 @@ on:
         type: choice
         options: [both, A, B]
         default: both
+      release:
+        description: "Publish a GitHub Release (boot.img + AnyKernel3 zip + Image)"
+        type: boolean
+        default: true
+      stock_boot_url:
+        description: "Optional: direct download URL of a stock boot.img (empty = use asset boot.img from the 'stock-boot' release of this repo)"
+        default: ""
       ksu_ref:
         description: "tiann/KernelSU branch/tag/commit (main = latest; auto-falls back to the SUSFS sync point if the SUSFS patch does not apply)"
         default: "main"
@@ -56,8 +63,27 @@ jobs:
             bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
             libssl-dev libelf-dev libncurses-dev dwarves patch
 
+      - name: Get stock boot.img
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STOCK_BOOT_URL: ${{ inputs.stock_boot_url }}
+        run: |
+          mkdir -p stock
+          if [ -n "$STOCK_BOOT_URL" ]; then
+            curl -fL --retry 3 -o stock/boot.img "$STOCK_BOOT_URL" || echo "::warning::could not download stock_boot_url"
+          elif gh release view stock-boot -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download stock-boot -R "$GITHUB_REPOSITORY" -p 'boot.img' -D stock || echo "::warning::stock-boot release has no boot.img asset"
+          fi
+          if [ -s stock/boot.img ]; then
+            echo "STOCK_BOOT=$PWD/stock/boot.img" >> "$GITHUB_ENV"
+            ls -l stock/boot.img
+          else
+            echo "::warning::No stock boot.img found; boot.img will not be built. Upload one as asset 'boot.img' to a release tagged 'stock-boot'."
+          fi
+
       - name: Build
         env:
+          GH_TOKEN: ${{ github.token }}
           SCHEME: ${{ matrix.scheme }}
           SRC_OWNER: ${{ github.repository_owner }}
           KSU_REF: ${{ inputs.ksu_ref }}
@@ -75,3 +101,43 @@ jobs:
           name: OP15-6.12.58-scheme-${{ matrix.scheme }}
           path: dist/
           if-no-files-found: warn
+
+  release:
+    name: Publish release
+    needs: build
+    if: ${{ !cancelled() && inputs.release }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download build results
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(artifacts/boot_*.img artifacts/AnyKernel3_*.zip artifacts/Image_* artifacts/build-info_*.txt artifacts/kernel_*.config)
+          if ! ls artifacts/Image_* >/dev/null 2>&1; then
+            echo "::error::No scheme built successfully, nothing to release"; exit 1
+          fi
+          KREL="$(sed -n 's/^kernelrelease *: //p' artifacts/build-info_*.txt | head -n1)"
+          TAG="op15-$(date -u +%Y%m%d)-r${{ github.run_number }}"
+          {
+            echo "OnePlus 15 · Linux ${KREL}"
+            echo
+            echo "- **Scheme A (NoMount)**: NoMount built in, SUSFS OPEN_REDIRECT off"
+            echo "- **Scheme B (OverlayFS)**: OverlayFS built in, SUSFS OPEN_REDIRECT on"
+            echo
+            echo "Files per scheme: \`boot_*.img\` (fastboot flash boot), \`AnyKernel3_*.zip\` (flash in manager/recovery), \`Image_*\` (raw kernel)."
+            echo "**Back up your stock boot.img before flashing.**"
+            for f in artifacts/build-info_*.txt; do
+              echo; echo '```'; cat "$f"; echo '```'
+            done
+          } > notes.md
+          gh release create "$TAG" "${files[@]}" -R "$GITHUB_REPOSITORY" \
+            --title "OnePlus 15 ${KREL} (${{ github.run_number }})" --notes-file notes.md
