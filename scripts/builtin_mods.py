@@ -45,10 +45,14 @@ shutil.copyfile(os.path.join(repo, "patches", "fgetpriority.h"),
 
 
 def use_fgp(text, rel):
-    n = text.count("user = find_user(uid);")
-    if n != 2:
-        die(f"{rel}: expected 2 find_user(uid) calls, found {n}")
-    text = text.replace("user = find_user(uid);", "user = fgp_find_user(uid);")
+    # Upstream has 2 per file (the PRIO_USER branch of each syscall); vendor trees
+    # may carry more copies of the same branch. Every one is a PRIO_USER lookup.
+    call = re.compile(r"\bfind_user\(\s*uid\s*\)")
+    lines = [i + 1 for i, l in enumerate(text.splitlines()) if call.search(l)]
+    if len(lines) < 2:
+        die(f"{rel}: expected at least 2 find_user(uid) calls, found {len(lines)}")
+    print(f"{rel}: find_user(uid) -> fgp_find_user(uid) at lines {lines}")
+    text = call.sub("fgp_find_user(uid)", text)
     anchor = "#include <linux/cred.h>\n"
     if anchor not in text:
         die(f"{rel}: no '#include <linux/cred.h>' to anchor the include")
