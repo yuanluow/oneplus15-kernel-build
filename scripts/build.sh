@@ -205,6 +205,8 @@ grep -E '^CONFIG_(LSM|LOCALVERSION|LOCALVERSION_AUTO|KSU_SUSFS_OPEN_REDIRECT|DEF
 
 # Commit all changes so the version never gets a "-dirty" suffix
 echo "/out/" >> .git/info/exclude
+# glibc 2.42+ returns const char * from strstr/strchr; host libbpf builds with -Werror
+sed -i -E 's/= (strstr|strchr)\(/= (char *)\1(/' tools/lib/bpf/libbpf.c
 git add -A >/dev/null 2>&1 || true
 git -c user.name=build-user -c user.email=build-user@build-host commit -qm "local build changes" || true
 endgroup
