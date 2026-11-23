@@ -170,6 +170,11 @@ git -C "$CACHE/susfs" checkout -q "$SUSFS_REF"
 SUSFS_DESC="$(git -C "$CACHE/susfs" rev-parse --short HEAD), $(git -C "$CACHE/susfs" log -1 --format=%cs)"
 cp -v "$CACHE"/susfs/kernel_patches/fs/* common/fs/
 cp -v "$CACHE"/susfs/kernel_patches/include/linux/* common/include/linux/
+# 上游 bug:关日志时 susfs.c 没定义 SUSFS_LOGI_RL/SUSFS_LOGE_RL,补两个空宏
+if [ "$(grep -c 'define SUSFS_LOGI_RL' common/fs/susfs.c)" = 1 ]; then
+  sed -i 's/^#define SUSFS_LOGE(fmt, \.\.\.)[[:space:]]*$/&\n#define SUSFS_LOGI_RL(fmt, ...)\n#define SUSFS_LOGE_RL(fmt, ...)/' common/fs/susfs.c
+  [ "$(grep -c 'define SUSFS_LOGI_RL' common/fs/susfs.c)" = 2 ] || { echo "❌ 补 SUSFS_LOG*_RL 空宏失败"; exit 1; }
+fi
 SUSFS_PATCH="$CACHE/susfs/kernel_patches/50_add_susfs_in_gki-android16-6.12.patch"
 # 幂等:如果已经打过就跳过(重复跑脚本时)
 if grep -q 'CONFIG_KSU_SUSFS' common/fs/open.c 2>/dev/null; then
@@ -206,6 +211,12 @@ if ! grep -q 'KSU_SUSFS' common/KernelSU/kernel/Kconfig 2>/dev/null; then
 fi
 KSU_DESC="$(git -C common/KernelSU describe --tags --always) ($(git -C common/KernelSU log -1 --format=%cs))"
 echo "KernelSU: $KSU_DESC"
+# 6.10+ 的 kbuild 里 $(src) 已带 $(srctree),O=out 时 srctree 是 "..",
+# KernelSU 拼出来的 include 路径是错的(找不到 uapi/app_profile.h),改成绝对路径
+if ! grep -q 'KSU_KERNEL_DIR := $(abspath $(srctree))/drivers/kernelsu' common/KernelSU/kernel/Kbuild; then
+  sed -i 's|^ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include|KSU_KERNEL_DIR := $(abspath $(srctree))/drivers/kernelsu\n&|' common/KernelSU/kernel/Kbuild
+  grep -q 'KSU_KERNEL_DIR := $(abspath $(srctree))/drivers/kernelsu' common/KernelSU/kernel/Kbuild || { echo "❌ 修 KSU_KERNEL_DIR 失败"; exit 1; }
+fi
 
 # ---------------------------------------------------------------- NoMount(方案 A)
 NOMOUNT_DESC="未包含"
