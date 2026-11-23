@@ -277,6 +277,9 @@ grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' out/.config || { echo "❌ 默认 TCP 
 
 # 提交改动,避免版本号带 -dirty
 echo "/out/" >> .git/info/exclude
+# 新版 glibc(2.42+,如 Ubuntu 25.10)里 strstr/strchr 返回 const char *,
+# 内核自带 libbpf 开了 -Werror 会编不过(resolve_btfids),加显式转换
+sed -i -E 's/= (strstr|strchr)\(/= (char *)\1(/' tools/lib/bpf/libbpf.c
 git add -A >/dev/null 2>&1 || true
 git -c user.name=kleaf -c user.email=kleaf@build-host commit -qm "local build" || true
 
