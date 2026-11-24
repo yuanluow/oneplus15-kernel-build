@@ -11,6 +11,9 @@ set -euo pipefail
 : "${NOMOUNT_REF:=}"
 : "${KERNEL_RELEASE:=}"
 : "${BUILD_TIMESTAMP:=}"
+: "${TC_DIR:=}"            # toolchain dir (CI caches it); empty = inside work/
+: "${USE_CCACHE:=auto}"    # auto = use ccache when it is installed, 0 = never
+: "${AUTOFDO:=1}"          # 1 = compile with the stock AutoFDO profile (what Kleaf does for GKI)
 
 [ "$SCHEME" = A ] || { echo "::error::only scheme A (NoMount) is supported"; exit 1; }
 
@@ -64,21 +67,26 @@ TOOLS_REV="$(rev_of kernel_platform/prebuilts/clang-tools)"
 echo "clang rev=$CLANG_REV rust rev=$RUST_REV clang-tools rev=$TOOLS_REV"
 [ -n "$CLANG_REV" ] && [ -n "$RUST_REV" ] && [ -n "$TOOLS_REV" ] || { echo "::error::could not read toolchain revisions from manifest"; exit 1; }
 
+TC_DIR="${TC_DIR:-$WORK}"
+mkdir -p "$TC_DIR"
 fetch_subdir() { # project rev subdir dest
   local proj="$1" rev="$2" sub="$3" dest="$4" name
   name="$(basename "$proj")"
-  mkdir -p "$dest"
+  # .rev marks a complete download of exactly this revision (restored from the Actions cache)
+  if [ "$(cat "$dest/.rev" 2>/dev/null)" = "$rev $sub" ]; then echo "cached: $dest ($sub)"; return 0; fi
+  rm -rf "$dest"; mkdir -p "$dest"
   retry curl -fL --retry 3 -o "$dest.tar.gz" "$CLO/$proj/-/archive/$rev/$name-$rev.tar.gz?path=$sub"
   tar -xzf "$dest.tar.gz" -C "$dest"
   rm -f "$dest.tar.gz"
+  echo "$rev $sub" > "$dest/.rev"
 }
-fetch_subdir kernelplatform/prebuilts-master/clang/host/linux-x86 "$CLANG_REV" "clang-$CLANG_VERSION" tc-clang
-fetch_subdir kernel_platform/prebuilts/rust "$RUST_REV" "linux-x86/${RUSTC_VERSION%.p*}" tc-rust
-fetch_subdir kernel_platform/prebuilts/clang-tools "$TOOLS_REV" "linux-x86/bin" tc-tools
+fetch_subdir kernelplatform/prebuilts-master/clang/host/linux-x86 "$CLANG_REV" "clang-$CLANG_VERSION" "$TC_DIR/tc-clang"
+fetch_subdir kernel_platform/prebuilts/rust "$RUST_REV" "linux-x86/${RUSTC_VERSION%.p*}" "$TC_DIR/tc-rust"
+fetch_subdir kernel_platform/prebuilts/clang-tools "$TOOLS_REV" "linux-x86/bin" "$TC_DIR/tc-tools"
 
-CLANG_BIN="$(dirname "$(find "$WORK/tc-clang" -path '*/bin/clang' | head -n1)")"
-RUST_BIN="$(dirname "$(find "$WORK/tc-rust" -path '*/bin/rustc' | head -n1)")"
-BINDGEN_BIN="$(dirname "$(find "$WORK/tc-tools" -path '*/bin/bindgen' | head -n1)")"
+CLANG_BIN="$(dirname "$(find "$TC_DIR/tc-clang" -path '*/bin/clang' | head -n1)")"
+RUST_BIN="$(dirname "$(find "$TC_DIR/tc-rust" -path '*/bin/rustc' | head -n1)")"
+BINDGEN_BIN="$(dirname "$(find "$TC_DIR/tc-tools" -path '*/bin/bindgen' | head -n1)")"
 RUST_ROOT="$(dirname "$RUST_BIN")"
 chmod +x "$BINDGEN_BIN/bindgen" || true
 export PATH="$CLANG_BIN:$RUST_BIN:$BINDGEN_BIN:$PATH"
@@ -90,7 +98,7 @@ endgroup
 
 # ---------------------------------------------------------------- SUSFS
 group "Apply SUSFS ($SUSFS_REF)"
-retry git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs
+retry git clone --filter=blob:none https://gitlab.com/simonpunk/susfs4ksu.git susfs
 git -C susfs checkout -q "$SUSFS_REF"
 SUSFS_DESC="$(git -C susfs rev-parse --short HEAD), $(git -C susfs log -1 --format=%cs)"
 echo "SUSFS: $SUSFS_DESC"
@@ -185,6 +193,38 @@ MAKE_ARGS=(O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
   RUSTC=rustc HOSTRUSTC=rustc BINDGEN=bindgen
   RUST_LIB_SRC="$RUST_ROOT/lib/rustlib/src/rust/library")
 
+# Same flags as Google's Kleaf GKI build (common/BUILD.bazel kernel_aarch64):
+# KCFLAGS from build.config.common and the AutoFDO profile shipped in the source.
+# Without the profile, CONFIG_AUTOFDO_CLANG=y only adds debug info and the kernel
+# misses the profile-guided layout/inlining the stock kernel has.
+KCFLAGS_EXTRA="-D__ANDROID_COMMON_KERNEL__"
+AFDO_PROFILE="$PWD/gki/aarch64/afdo/kernel.afdo"
+AFDO_DESC="off"
+if [ "$AUTOFDO" = 1 ] && [ -s "$AFDO_PROFILE" ]; then
+  MAKE_ARGS+=(CLANG_AUTOFDO_PROFILE="$AFDO_PROFILE")
+  AFDO_DESC="gki/aarch64/afdo/kernel.afdo (sha256 $(sha256sum "$AFDO_PROFILE" | cut -c1-12))"
+elif [ "$AUTOFDO" = 1 ]; then
+  echo "::warning::gki/aarch64/afdo/kernel.afdo not found, building without AutoFDO profile"
+fi
+echo "AutoFDO profile: $AFDO_DESC"
+
+# ccache: big win when only KernelSU/SUSFS changed (most objects are reused)
+CCACHE_DESC="off"
+if [ "$USE_CCACHE" != 0 ] && command -v ccache >/dev/null; then
+  # CC only: rust/Makefile uses -Clinker=$(HOSTCC), which breaks on "ccache clang"
+  MAKE_ARGS+=(CC="ccache clang")
+  export CCACHE_DIR="${CCACHE_DIR:-$HOME/.ccache}"
+  export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-5G}"
+  export CCACHE_COMPILERCHECK="string:$CLANG_REV"
+  # fresh git checkouts have brand-new mtimes; let direct mode work anyway
+  export CCACHE_SLOPPINESS="file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,time_macros,locale"
+  [ -s "$AFDO_PROFILE" ] && export CCACHE_EXTRAFILES="$AFDO_PROFILE"
+  ccache -z >/dev/null
+  CCACHE_DESC="on ($CCACHE_DIR)"
+elif [ "$USE_CCACHE" != 0 ]; then
+  echo "ccache not installed, building without it"
+fi
+
 make "${MAKE_ARGS[@]}" gki_defconfig
 
 # Add baseband_guard to the LSM list without dropping the stock entries
@@ -235,7 +275,8 @@ if [ -n "$BUILD_TIMESTAMP" ]; then export KBUILD_BUILD_TIMESTAMP="$BUILD_TIMESTA
 # Kleaf builds GKI with gendwarfksyms --stable (honours ANDROID_KABI_* rules).
 # Without it the symbol CRCs differ from stock and no vendor module loads.
 export KBUILD_GENDWARFKSYMS_STABLE=1
-make "${MAKE_ARGS[@]}" -j"$(nproc --all)" KCFLAGS="-Wno-error" Image 2>&1 | tee "$WORK/build.log"
+make "${MAKE_ARGS[@]}" -j"$(nproc --all)" KCFLAGS="$KCFLAGS_EXTRA -Wno-error" Image 2>&1 | tee "$WORK/build.log"
+if [ "$CCACHE_DESC" != off ]; then ccache -s | grep -iE 'hits|misses|cache size' || true; fi
 test -f out/arch/arm64/boot/Image
 KREL="$(make -s "${MAKE_ARGS[@]}" kernelrelease)"
 echo "kernelrelease: $KREL"
@@ -304,6 +345,8 @@ Built in        : unicode bypass fix, fgetpriority
 Blocked modules : ${BLOCK_MODULES-oplus_secure_guard_new}
 clang           : $(clang --version | head -n1)
 rustc           : $(rustc --version)
+AutoFDO profile : $AFDO_DESC
+KCFLAGS         : $KCFLAGS_EXTRA -Wno-error
 boot.img        : $BOOT_DESC
 Image sha256    : $(sha256sum "$DIST/Image_$NAME" | cut -d' ' -f1)
 EOF

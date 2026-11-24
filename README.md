@@ -5,6 +5,21 @@
 内置模块：**fgetpriority**（应用无法通过 getpriority/setpriority/ioprio 探测其他应用的 UID，配合 HMA 用）、**屏蔽 `oplus_secure_guard_new`**（等同 sg_unblock，内核直接拒绝加载它，解除它对 /data/adb 等目录二进制的执行拦截）。刷了本内核就**卸载 fgetpriority 和 sg_unblock 这两个 KSU 模块**。要屏蔽别的厂商模块，用环境变量 `BLOCK_MODULES=模块1,模块2`（本地编译）。
 保持原厂：编译优化、ZRAM、CFI、SCS；只替换 boot 里的内核，不动 vendor_dlkm / system_dlkm。
 
+## 性能
+
+**手机上的运行性能**：和原厂内核用同一种优化方式编译。
+
+- **AutoFDO**：原厂 GKI 是 Google 用 Kleaf 编的，会带上源码里的 `gki/aarch64/afdo/kernel.afdo`。这个文件是按真机负载采样得到的配置文件，编译器用它调整热点函数的内联和代码布局，冷代码拆到单独的段。之前的版本没带，只开了 `CONFIG_AUTOFDO_CLANG`，现在默认带上（`AUTOFDO=0` 可关）。KCFLAGS 也和官方一样加上 `-D__ANDROID_COMMON_KERNEL__`
+- **其余内核配置和原厂逐项一致**（从原厂 boot.img 里提取 `ikconfig` 对比过），包括 `-O2`、LTO 关、HZ=250、ZRAM lzo-rle、CFI、SCS。只多了 KernelSU/SUSFS/NoMount/BBG/TTL/IP_SET，以及默认 TCP 拥塞控制 BBR（原厂是 cubic）
+- **刻意不改的**：HZ、LTO、`-O3`、调度器之类。厂商驱动模块（vendor_dlkm）是按原厂配置编的，HZ 改了 jiffies 换算就错；原厂没开 LTO，开了之后目标文件变成 bitcode，符号 CRC 的计算方式跟着变，很可能和原厂对不上，那样所有厂商模块都会加载失败，卡第一屏。这些"超频式"改动在 GKI 上收益很小、风险是不开机，所以不做
+
+> 带 AutoFDO 编出来的内核符号 CRC 已和原厂核对一致，但还没在真机上长期使用。`boot/` 里那个真机验证过的版本是不带 AutoFDO 编的，求稳就刷那个。
+
+**编译速度**：
+
+- 云端：clang/rust 工具链（约 5.5GB，按 manifest 里的版本做缓存键）、pahole 1.30 和 **ccache** 都存进 Actions 缓存。第一次和以前一样慢，之后不用再从 CodeLinaro 下工具链；只更新了 KernelSU/SUSFS 时绝大部分目标文件直接命中 ccache
+- 本地：装了 `ccache` 就自动用（缓存在 `work/_cache/ccache`，上限 10GB，`USE_CCACHE=0` 关）
+
 方案 A：`CONFIG_NOMOUNT=y`（NoMount 最新 tag），SUSFS OPEN_REDIRECT 关（避免和 NoMount 重叠），SUSFS sus_mount 编进去但可以少用。原来的方案 B（OverlayFS）已经移除，只保留 A。
 
 ## 真机验证过的版本
@@ -84,7 +99,7 @@ boot.img 是拿原厂 boot.img 用 magiskboot 只换内核重新打包的，头�
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
-  libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch ca-certificates make gcc
+  libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch ca-certificates make gcc ccache
 ```
 
 **Fedora / RHEL / Rocky / AlmaLinux**（RHEL 系先 `sudo dnf install -y epel-release` 并启用 CRB）
@@ -92,14 +107,14 @@ sudo apt-get install -y --no-install-recommends \
 ```bash
 sudo dnf install -y bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
   openssl-devel elfutils-libelf-devel elfutils-devel ncurses-devel dwarves patch \
-  ca-certificates make gcc which diffutils findutils
+  ca-certificates make gcc which diffutils findutils ccache
 ```
 
 **Arch Linux / Manjaro / EndeavourOS**
 
 ```bash
 sudo pacman -Syu --needed bc bison flex cpio zip unzip lz4 zstd python git curl rsync \
-  openssl libelf elfutils ncurses pahole patch ca-certificates make gcc which diffutils
+  openssl libelf elfutils ncurses pahole patch ca-certificates make gcc which diffutils ccache
 ```
 
 **openSUSE Tumbleweed / Leap**
@@ -107,7 +122,7 @@ sudo pacman -Syu --needed bc bison flex cpio zip unzip lz4 zstd python git curl 
 ```bash
 sudo zypper install -y bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
   libopenssl-devel libelf-devel libdw-devel ncurses-devel dwarves patch \
-  ca-certificates make gcc which diffutils
+  ca-certificates make gcc which diffutils ccache
 ```
 
 **其他发行版**：对照上面装同样的东西即可。必须有的是 `dwarf.h`（libdw / elfutils 开发包，编译主机工具 gendwarfksyms 要用）、`libelf`、`openssl` 开发头文件和 `pahole`。
@@ -146,11 +161,11 @@ STOCK_BOOT=~/boot_stock.img \
 ./scripts/wsl-build.sh
 ```
 
-常用环境变量：`STOCK_BOOT`(原厂 boot.img 路径，给了才出 boot.img)、`KERNEL_RELEASE`/`BUILD_TIMESTAMP`(伪装版本号)、`SRC_OWNER`(用你 fork 的源码就填你的用户名)、`SUSFS_REF`(回退 v2.2.0 填 `f37930f374ef88de990d6abea0c67d0ea28c1edc`)、`KSU_REF`、`NOMOUNT_REF`、`BBG_REF`、`JOBS`(并行度，默认全部核心)、`BLOCK_MODULES`。
+常用环境变量：`STOCK_BOOT`(原厂 boot.img 路径，给了才出 boot.img)、`KERNEL_RELEASE`/`BUILD_TIMESTAMP`(伪装版本号)、`SRC_OWNER`(用你 fork 的源码就填你的用户名)、`SUSFS_REF`(回退 v2.2.0 填 `f37930f374ef88de990d6abea0c67d0ea28c1edc`)、`KSU_REF`、`NOMOUNT_REF`、`BBG_REF`、`JOBS`(并行度，默认全部核心)、`BLOCK_MODULES`、`AUTOFDO`(默认 1)、`USE_CCACHE`(默认装了就用)。
 
 想先看看上游现在是什么版本：`./scripts/upstream.sh`。
 
-产物在 `dist/`：`AnyKernel3_*.zip`、`boot_*.img`、`Image_*`、`build-info_schemeA.txt`、`kernel_schemeA.config`。第一次会下约 1.5GB 工具链、占约 25GB 磁盘；重复跑会复用已下载的工具链和源码（全新来就删掉 `work/`）。
+产物在 `dist/`：`AnyKernel3_*.zip`、`boot_*.img`、`Image_*`、`build-info_schemeA.txt`、`kernel_schemeA.config`。第一次会下约 1.5GB 压缩包（解压后约 5.5GB）的工具链、占约 30GB 磁盘（含 ccache）；重复跑会复用已下载的工具链和源码（全新来就删掉 `work/`）。
 
 ### 关于下载慢
 

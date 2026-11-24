@@ -149,21 +149,58 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
-            libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch cmake zlib1g-dev
+            libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch cmake zlib1g-dev ccache
 
       # Ubuntu 24.04 ships pahole 1.25, which caps per-CPU vars at 4096 and emits a
-      # broken BTF for this kernel ("FAILED: load BTF from vmlinux"). Build a newer one.
+      # broken BTF for this kernel ("FAILED: load BTF from vmlinux"). Build a newer one
+      # once and keep it in the Actions cache.
+      - name: Restore pahole v1.30
+        id: pahole
+        uses: actions/cache@v4
+        with:
+          path: ~/pahole
+          key: pahole-v1.30-ubuntu-24.04
+
       - name: Build pahole v1.30
+        if: steps.pahole.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --recurse-submodules --shallow-submodules -b v1.30 \
             https://github.com/acmel/dwarves.git /tmp/dwarves
-          cmake -S /tmp/dwarves -B /tmp/dwarves/build -D__LIB=lib \
-            -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release
-          sudo make -C /tmp/dwarves/build -j"$(nproc)" install
-          sudo ldconfig
-          hash -r
-          which pahole
-          pahole --version
+          cmake -S /tmp/dwarves -B /tmp/dwarves/build -D__LIB=lib -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/pahole" -DCMAKE_INSTALL_RPATH="$HOME/pahole/lib"
+          make -C /tmp/dwarves/build -j"$(nproc)" install
+
+      - name: Use pahole v1.30
+        run: |
+          echo "$HOME/pahole/bin" >> "$GITHUB_PATH"
+          "$HOME/pahole/bin/pahole" --version
+
+      # The clang/rust/bindgen prebuilts (~5.5 GB) come from CodeLinaro at the revisions
+      # pinned in OnePlus' manifest; cache them under a key made of those revisions.
+      - name: Toolchain cache key
+        id: tc
+        run: |
+          curl -fsSL --retry 5 https://raw.githubusercontent.com/OnePlusOSS/kernel_manifest/oneplus/sm8850/oneplus_15.xml -o /tmp/manifest.xml
+          curl -fsSL --retry 5 "https://raw.githubusercontent.com/OnePlusOSS/android_kernel_common_oneplus_sm8850/oneplus/sm8850_b_16.0.0_oneplus_15/build.config.constants" -o /tmp/constants || : > /tmp/constants
+          key=$( { grep -E 'prebuilts-master/clang/host/linux-x86|prebuilts/rust"|prebuilts/clang-tools"' /tmp/manifest.xml; \
+                   grep -E '^(CLANG|RUSTC)_VERSION' /tmp/constants; } | sha256sum | cut -c1-16)
+          echo "key=tc-$key" >> "$GITHUB_OUTPUT"
+          echo "toolchain key: tc-$key"
+
+      - name: Restore toolchain
+        id: tc_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/tc
+          key: ${{ steps.tc.outputs.key }}
+
+      # ccache of the kernel objects: a new entry per run, restored from the newest one
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          key: ccache-op15-${{ github.run_id }}
+          restore-keys: ccache-op15-
 
       - name: Get stock boot.img
         env:
@@ -190,7 +227,25 @@ jobs:
           SRC_OWNER: ${{ github.repository_owner }}
           BBG_REF: ${{ inputs.bbg_ref }}
           NOMOUNT_REF: ${{ inputs.nomount_ref }}
-        run: bash scripts/build.sh
+          CCACHE_MAXSIZE: 3G
+        run: |
+          export TC_DIR="$HOME/tc" CCACHE_DIR="$HOME/.ccache"
+          bash scripts/build.sh
+
+      # Saved even when the build fails, so a retry does not download 5.5 GB again
+      - name: Save toolchain
+        if: always() && steps.tc_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/tc
+          key: ${{ steps.tc.outputs.key }}
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: ccache-op15-${{ github.run_id }}
 
       - name: Upload result
         if: always()

@@ -12,7 +12,7 @@
 #   sudo apt-get install -y --no-install-recommends \
 #     bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
 #     libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch ca-certificates \
-#     make gcc
+#     make gcc ccache
 #   # 打包 boot.img 的 magiskboot 脚本会自动下载,无需手动装。
 #
 # ---- 用法 ----
@@ -51,6 +51,8 @@ set -euo pipefail
 : "${BUILD_TIMESTAMP:=}"                      # 伪装的 uname -v 里的时间
 : "${STOCK_BOOT:=}"                           # 原厂 boot.img 路径(空=不打包 boot.img)
 : "${JOBS:=$(nproc)}"                         # 并行度
+: "${USE_CCACHE:=auto}"                       # auto=装了 ccache 就用(第二次起快很多),0=不用
+: "${AUTOFDO:=1}"                             # 1=用源码自带的 AutoFDO 配置文件编译(和原厂 Kleaf 一样)
 
 [ "$SCHEME" = A ] || { echo "只支持方案 A(NoMount),方案 B 已移除"; exit 1; }
 
@@ -247,6 +249,37 @@ MAKE_ARGS=(O=out ARCH=arm64 LLVM=1 LLVM_IAS=1
   RUSTC=rustc HOSTRUSTC=rustc BINDGEN=bindgen
   RUST_LIB_SRC="$RUST_ROOT/lib/rustlib/src/rust/library")
 
+# 和 Google 官方 Kleaf 编 GKI 时一样的参数(common/BUILD.bazel 里 kernel_aarch64):
+# build.config.common 里的 KCFLAGS + 源码自带的 AutoFDO 配置文件。
+# 不给配置文件的话 CONFIG_AUTOFDO_CLANG=y 只是多了调试信息,
+# 少了原厂那套按真实负载做的代码布局/内联优化。
+KCFLAGS_EXTRA="-D__ANDROID_COMMON_KERNEL__"
+AFDO_PROFILE="$PWD/gki/aarch64/afdo/kernel.afdo"
+AFDO_DESC="关"
+if [ "$AUTOFDO" = 1 ] && [ -s "$AFDO_PROFILE" ]; then
+  MAKE_ARGS+=(CLANG_AUTOFDO_PROFILE="$AFDO_PROFILE")
+  AFDO_DESC="gki/aarch64/afdo/kernel.afdo (sha256 $(sha256sum "$AFDO_PROFILE" | cut -c1-12))"
+elif [ "$AUTOFDO" = 1 ]; then
+  echo "⚠ 源码里没有 gki/aarch64/afdo/kernel.afdo,不带 AutoFDO 编译"
+fi
+echo "AutoFDO 配置文件: $AFDO_DESC"
+
+# ccache:只改了 KernelSU/SUSFS 时,绝大部分目标文件直接复用
+CCACHE_DESC="关"
+if [ "$USE_CCACHE" != 0 ] && command -v ccache >/dev/null; then
+  # 只给 CC 加:rust/Makefile 用 -Clinker=$(HOSTCC),写成 "ccache clang" 会报错
+  MAKE_ARGS+=(CC="ccache clang")
+  export CCACHE_DIR="${CCACHE_DIR:-$CACHE/ccache}"
+  export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-10G}"
+  export CCACHE_COMPILERCHECK="string:$CLANG_REV"
+  export CCACHE_SLOPPINESS="file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,time_macros,locale"
+  [ -s "$AFDO_PROFILE" ] && export CCACHE_EXTRAFILES="$AFDO_PROFILE"
+  ccache -z >/dev/null
+  CCACHE_DESC="开 ($CCACHE_DIR)"
+elif [ "$USE_CCACHE" != 0 ]; then
+  echo "没装 ccache,不用缓存编译(sudo apt install ccache 之后重复编译会快很多)"
+fi
+
 make "${MAKE_ARGS[@]}" gki_defconfig
 
 # baseband_guard 接到 CONFIG_LSM 末尾(保留原厂的所有项)
@@ -298,8 +331,9 @@ if [ -d out ] && [ ! -f out/.gendwarfksyms_stable ]; then
   echo "检测到旧的编译产物(未开 --stable),清理后重新编译"
   make "${MAKE_ARGS[@]}" clean >/dev/null
 fi
-make "${MAKE_ARGS[@]}" -j"$JOBS" KCFLAGS="-Wno-error" Image
+make "${MAKE_ARGS[@]}" -j"$JOBS" KCFLAGS="$KCFLAGS_EXTRA -Wno-error" Image
 touch out/.gendwarfksyms_stable
+if [ "$CCACHE_DESC" != 关 ]; then ccache -s | grep -iE 'hits|misses|cache size' || true; fi
 test -f out/arch/arm64/boot/Image
 KREL="$(make -s "${MAKE_ARGS[@]}" kernelrelease)"
 echo "kernelrelease: $KREL"
@@ -365,6 +399,9 @@ Built in        : unicode bypass fix, fgetpriority
 Blocked modules : ${BLOCK_MODULES-oplus_secure_guard_new}
 boot.img        : $BOOT_DESC
 clang           : $(clang --version | head -n1)
+AutoFDO profile : $AFDO_DESC
+KCFLAGS         : $KCFLAGS_EXTRA -Wno-error
+ccache          : $CCACHE_DESC
 Image sha256    : $(sha256sum "$DIST/Image_$NAME" | cut -d' ' -f1)
 EOF
 
