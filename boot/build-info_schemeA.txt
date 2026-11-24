@@ -1,0 +1,13 @@
+scheme          : A (NoMount 内置, SUSFS OPEN_REDIRECT 关)
+kernelrelease   : 6.12.58-android16-6-g925a103d123c-ab15898589-4k
+source          : OnePlusOSS @ 3cee17c487060c7d975313c9af893948a4148056
+                  local build
+KernelSU        : v3.3.1-55-g2a60b289 (2026-11-21)
+SUSFS           : gki-android16-6.12 (9b0b13f, 2026-11-15)
+NoMount         : v2.3.1 (built-in)
+Baseband-guard  : main
+Built in        : unicode bypass fix, fgetpriority
+Blocked modules : oplus_secure_guard_new
+boot.img        : 由原厂 boot.img 重新打包
+clang           : Android (12833971, +pgo, +bolt, +lto, +mlgo, based on r536225) clang version 19.0.1 (https://android.googlesource.com/toolchain/llvm-project b3a530ec6537146650e42be89f1089e9a3588460)
+Image sha256    : 9bda586e56126ff58df0fff857a850a6ca5bc5d88202faf88bcbae410eb84490

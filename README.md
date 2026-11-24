@@ -1,28 +1,62 @@
-# 一加 15 内核云编译（方案 A / B）
+# 一加 15 内核编译（方案 A：NoMount）
 
 底座：一加官方 6.12.58 源码（`oneplus/sm8850_b_16.0.0_oneplus_15`，16.0.10.601 同步）
-组件：KernelSU 官方最新 main + SUSFS 最新（`gki-android16-6.12` 分支）+ Baseband-guard + TTL + IP_SET + BBR 默认开启 + Unicode 绕过修复（`patches/unicode_bypass_fix.patch`，挡住零宽字符探测 `/sdcard/Android/data` 里被隐藏的应用）
-内置模块：**fgetpriority**（应用无法通过 getpriority/setpriority/ioprio 探测其他应用的 UID，配合 HMA 用）、**屏蔽 `oplus_secure_guard_new`**（等同 sg_unblock，内核直接拒绝加载它，解除它对 /data/adb 等目录二进制的执行拦截）。刷了本内核就**卸载 fgetpriority 和 sg_unblock 这两个 KSU 模块**。要屏蔽别的厂商模块，用环境变量 `BLOCK_MODULES=模块1,模块2`（WSL）。
+组件：KernelSU 官方最新 main + SUSFS 最新（`gki-android16-6.12` 分支）+ **NoMount 内置** + Baseband-guard + TTL + IP_SET + BBR 默认开启 + Unicode 绕过修复（`patches/unicode_bypass_fix.patch`，挡住零宽字符探测 `/sdcard/Android/data` 里被隐藏的应用）
+内置模块：**fgetpriority**（应用无法通过 getpriority/setpriority/ioprio 探测其他应用的 UID，配合 HMA 用）、**屏蔽 `oplus_secure_guard_new`**（等同 sg_unblock，内核直接拒绝加载它，解除它对 /data/adb 等目录二进制的执行拦截）。刷了本内核就**卸载 fgetpriority 和 sg_unblock 这两个 KSU 模块**。要屏蔽别的厂商模块，用环境变量 `BLOCK_MODULES=模块1,模块2`（本地编译）。
 保持原厂：编译优化、ZRAM、CFI、SCS；只替换 boot 里的内核，不动 vendor_dlkm / system_dlkm。
 
-| | 方案 A：NoMount（隐蔽优先） | 方案 B：OverlayFS（稳定优先） |
+方案 A：`CONFIG_NOMOUNT=y`（NoMount 最新 tag），SUSFS OPEN_REDIRECT 关（避免和 NoMount 重叠），SUSFS sus_mount 编进去但可以少用。原来的方案 B（OverlayFS）已经移除，只保留 A。
+
+## 真机验证过的版本
+
+仓库 [`boot/`](boot/) 目录里放着**已经在真机上运行成功**的 boot.img（不在 Releases 里）：
+
+| 机型 | 固件 | 文件 |
 |---|---|---|
-| 编进内核 | `CONFIG_NOMOUNT=y`（NoMount 最新 tag） | `CONFIG_OVERLAY_FS=y`（原厂本来就是 y） |
-| SUSFS OPEN_REDIRECT | 关（避免和 NoMount 重叠） | 开 |
-| SUSFS sus_mount | 编进去，可以少用 | 编进去，用来隐藏 overlay 挂载 |
-| 风险 | VFS 层改动，稳定性风险最高 | 最成熟，挂载表痕迹靠 sus_mount 盖 |
+| 一加 15 CPH2747（欧版） | **OxygenOS 16 `CPH2747_16.0.10.601(EX01)`**，安全补丁 2026-09-01 | `boot/boot_OP15_schemeA_CPH2747_16.0.10.601_EX01.img` |
+
+这个文件和手机 `boot_a` 分区逐字节一致（sha256 见 `boot/SHA256SUMS`），详细版本见 `boot/README.md` 和 `boot/build-info_schemeA.txt`。它是用 16.0.10.601 的原厂 boot.img 打包的，**只能刷在 16.0.10.601(EX01) 上**。
+
+Releases 里的是自动编译的版本，没有经过真机测试。
+
+## 自动编译（每 3 天）
+
+`.github/workflows/build.yml` 每 3 天（UTC 20:00）自动跑一次：
+
+1. **检查上游**（`scripts/upstream.sh`）：一加源码分支、你的 fork、`kernel_manifest`（工具链）、KernelSU main、SUSFS、NoMount 最新 tag、Baseband-guard，和上一次 Release 里的 `upstream.txt` 比较
+2. **有更新才编译**，没有更新就跳过（Actions 页面的 Summary 里有对比表）
+3. 编完自动发布到 **Releases**，说明里列出哪些组件更新了
+4. 一加源码出现新的一加 15 分支（新底包）时会给出黄色警告，但不会自动换分支，需要你确认后改 `SRC_BRANCH`
+
+**同步 fork**：编译优先用你账号下 fork 的 `android_kernel_common_oneplus_sm8850`。fork 落后时 Actions 会提示；想全自动同步，建一个只对这个 fork 有 Contents 读写权限的 fine-grained token，存成仓库 Secret `SYNC_TOKEN`。不想用 token 就去 fork 页面点 **Sync fork**。
+
+**换固件后**：在仓库 Settings → Secrets and variables → Actions → **Variables** 里设置 `KERNEL_RELEASE`（新固件的 `uname -r`）和 `BUILD_TIMESTAMP`（`uname -v` 里的时间），并把 `stock-boot` Release 里的 boot.img 换成新固件的。不设置就用 16.0.10.601 的值。
+
+注意：仓库 60 天没有任何提交，GitHub 会自动暂停定时任务，到 Actions 页面点一下 Enable 即可恢复。
+
+## 手动云编译
+
+1. 仓库页面 → **Actions** → **Build OnePlus 15 kernel** → **Run workflow**
+2. `release` 默认勾选：编完自动发布到 **Releases**（手动运行不管上游有没有更新都会编）
+3. 可选：`kernel_release` / `build_timestamp` 填原厂 `uname -r` / `uname -v` 里的时间来伪装版本号；`ksu_ref`、`susfs_ref`、`nomount_ref`、`bbg_ref` 指定组件版本
+4. 等 1～2 小时，到 **Releases** 下载
+
+发布的文件：
+
+| 文件 | 用途 |
+|---|---|
+| `boot_*.img` | `fastboot flash boot boot_*.img` 直接刷 |
+| `AnyKernel3_*.zip` | 管理器或第三方 Recovery 卡刷 |
+| `Image_*` | 单独的内核文件，自己打包用 |
+| `build-info_schemeA.txt` / `kernel_schemeA.config` | 版本信息和完整内核配置 |
+| `upstream.txt` | 这次编译时各上游的版本，下次定时检查用 |
 
 ## KernelSU 和 SUSFS 的版本
 
 - 默认拉 KernelSU 官方 `main` 最新提交，SUSFS 拉 `gki-android16-6.12` 分支最新提交
 - SUSFS 的 KernelSU 补丁只跟到 SUSFS 作者同步过的那个 KernelSU 提交。如果最新 main 已经改得补丁打不上，脚本会自动退回到 SUSFS 最后同步的那个提交，日志里有黄色 `::warning::` 提示
-- 实际用了哪个版本，看产物里的 `build-info.txt`
+- 实际用了哪个版本，看产物里的 `build-info_schemeA.txt`
 - 想回到 SUSFS v2.2.0：`susfs_ref` 填 `f37930f374ef88de990d6abea0c67d0ea28c1edc`，`ksu_ref` 填 `953b403ab5ea2c1d866f72f6a7e67ce9224b8932`
-
-## 源码从哪来
-
-编译时优先拉你自己账号下 fork 的 `android_kernel_common_oneplus_sm8850`，找不到才回退到 OnePlusOSS。
-一加更新源码后，到你的 fork 页面点 **Sync fork** 即可。
 
 工具链（clang r536225、rustc 1.82.0、bindgen）按一加 `kernel_manifest` 里 `oneplus_15.xml` 锁定的版本从 CodeLinaro 下载，和官方构建一致。
 
@@ -34,32 +68,17 @@ boot.img 是拿原厂 boot.img 用 magiskboot 只换内核重新打包的，头�
 2. 仓库页面 → **Releases** → **Draft a new release**，tag 填 `stock-boot`，把文件命名为 `boot.img` 上传，发布
 3. 以后升级固件，就把这个 release 里的 boot.img 换成新版本的
 
-也可以在运行时用 `stock_boot_url` 直接填一个下载链接。没有原厂 boot.img 时照样编译，只是不出 boot.img。
+也可以在手动运行时用 `stock_boot_url` 直接填一个下载链接。没有原厂 boot.img 时照样编译，只是不出 boot.img。
 
-## 怎么编
+## 本地编译（WSL 或任何 Linux）
 
-1. 仓库页面 → **Actions** → **Build OnePlus 15 kernel** → **Run workflow**
-2. `scheme` 选 `both`（两套都编）、`A` 或 `B`
-3. `release` 默认勾选：编完自动发布到 **Releases**
-4. 可选：`kernel_release` 填手机原厂 `uname -r` 的结果，`build_timestamp` 填原厂 `uname -v` 里的时间，用来伪装版本号
-5. 等 1～2 小时，到 **Releases** 下载
+`scripts/wsl-build.sh` 是本地编译脚本，名字里有 wsl，但在任何 **x86_64 Linux** 上都能用（工具链是 x86_64 的预编译版，ARM 主机不行）。底座和组件和云端完全一样。
 
-每个方案发布的文件：
+需要：约 25GB 空闲磁盘、16GB 以上内存（8GB 请把 `JOBS` 调小）、能访问 GitHub / GitLab / CodeLinaro。
 
-| 文件 | 用途 |
-|---|---|
-| `boot_*.img` | `fastboot flash boot boot_*.img` 直接刷 |
-| `AnyKernel3_*.zip` | 管理器或第三方 Recovery 卡刷 |
-| `Image_*` | 单独的内核文件，自己打包用 |
-| `build-info_*.txt` / `kernel_*.config` | 版本信息和完整内核配置 |
+### 1. 装依赖
 
-文件名里带 `schemeA` / `schemeB` 区分。Actions 运行页底部的 Artifacts 里也有同样的文件。
-
-## 本地编译（WSL，云端之外的另一种方式）
-
-云端 Actions 和本地 WSL 两种方式并存，用哪个都行，底座和组件完全一样。本地适合想自己改源码、或不想占用 Actions 时长。
-
-**1. 装 WSL 和依赖**（Ubuntu 22.04 / 24.04）
+**Ubuntu / Debian / Linux Mint / WSL（Ubuntu 22.04、24.04）**
 
 ```bash
 sudo apt-get update
@@ -68,45 +87,74 @@ sudo apt-get install -y --no-install-recommends \
   libssl-dev libelf-dev libdw-dev libncurses-dev dwarves patch ca-certificates make gcc
 ```
 
-`libdw-dev` 不能漏（编译主机工具 gendwarfksyms 需要它的 `dwarf.h`）。
+**Fedora / RHEL / Rocky / AlmaLinux**（RHEL 系先 `sudo dnf install -y epel-release` 并启用 CRB）
 
-### 关于下载慢
+```bash
+sudo dnf install -y bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
+  openssl-devel elfutils-libelf-devel elfutils-devel ncurses-devel dwarves patch \
+  ca-certificates make gcc which diffutils findutils
+```
 
-工具链(约 1GB)从 CodeLinaro 下,速度由对方服务器决定,几 MB/s 是它的限速,换多线程下载器也快不了,所以脚本就用默认 curl。能省时间的是**共享缓存**:工具链、SUSFS、AnyKernel3、magiskboot 都存到 `work/_cache`,**同一个文件只下一次**——编 `both` 时 A、B 共用,之后重复编也直接复用,所以慢的只有第一次。想全新重下就删掉 `work/_cache`。
+**Arch Linux / Manjaro / EndeavourOS**
 
-**2. 把仓库放到 WSL 的 Linux 目录**（不要放 `/mnt/c`，否则软链接和权限会出问题）
+```bash
+sudo pacman -Syu --needed bc bison flex cpio zip unzip lz4 zstd python git curl rsync \
+  openssl libelf elfutils ncurses pahole patch ca-certificates make gcc which diffutils
+```
+
+**openSUSE Tumbleweed / Leap**
+
+```bash
+sudo zypper install -y bc bison flex cpio zip unzip lz4 zstd python3 git curl rsync \
+  libopenssl-devel libelf-devel libdw-devel ncurses-devel dwarves patch \
+  ca-certificates make gcc which diffutils
+```
+
+**其他发行版**：对照上面装同样的东西即可。必须有的是 `dwarf.h`（libdw / elfutils 开发包，编译主机工具 gendwarfksyms 要用）、`libelf`、`openssl` 开发头文件和 `pahole`。
+
+**pahole 版本**：要 1.26 以上，太旧（比如 Ubuntu 24.04 自带的 1.25）会在最后报 `FAILED: load BTF from vmlinux`。`pahole --version` 看一下，旧的话自己编一个新的：
+
+```bash
+sudo apt-get install -y cmake zlib1g-dev   # Fedora: cmake zlib-devel；Arch: cmake zlib
+git clone --depth 1 --recurse-submodules --shallow-submodules -b v1.30 https://github.com/acmel/dwarves.git /tmp/dwarves
+cmake -S /tmp/dwarves -B /tmp/dwarves/build -D__LIB=lib -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_BUILD_TYPE=Release
+sudo make -C /tmp/dwarves/build -j"$(nproc)" install && sudo ldconfig && hash -r
+pahole --version
+```
+
+Arch、Fedora 40+、openSUSE Tumbleweed 自带的 pahole 已经够新。
+
+### 2. 拿仓库
 
 ```bash
 cd ~ && git clone https://github.com/yuanluow/oneplus15-kernel-build.git op15 && cd op15
 chmod +x scripts/wsl-build.sh
 ```
 
-**3. 编译**
+WSL 下一定要放在 Linux 目录（比如 `~/op15`），不要放 `/mnt/c`，否则软链接和权限会出问题。普通 Linux 放在任何 ext4 / btrfs / xfs 目录都行。
+
+### 3. 编译
 
 ```bash
-# 只编方案 A（NoMount）:
-SCHEME=A ./scripts/wsl-build.sh
-
-# 编方案 B，并伪装成原厂版本号、顺便打进 boot.img:
-SCHEME=B \
-KERNEL_RELEASE='6.12.58-android16-6-g925a103d123c-ab15898589-4k' \
-BUILD_TIMESTAMP='Mon Jul 20 17:37:05 UTC 2026' \
-STOCK_BOOT=~/boot_stock.img \
+# 最简单：只出 AnyKernel3 zip 和 Image
 ./scripts/wsl-build.sh
 
-# A、B 两套一次编完（和云端 both 一样，各用独立源码目录，产物都进 dist/）:
-SCHEME=both \
+# 伪装成原厂版本号，并打进原厂 boot.img（和 boot/ 里验证过的那个一样的参数）
 KERNEL_RELEASE='6.12.58-android16-6-g925a103d123c-ab15898589-4k' \
 BUILD_TIMESTAMP='Mon Jul 20 17:37:05 UTC 2026' \
 STOCK_BOOT=~/boot_stock.img \
 ./scripts/wsl-build.sh
 ```
 
-`SCHEME=both` 会先编 A 再编 B，两套各占一个 `work/scheme-A`、`work/scheme-B` 目录（互不干扰），所以磁盘占用翻倍（约 50GB），你 i9+32G+NVMe 跑满核两套大概 15 分钟内。
+常用环境变量：`STOCK_BOOT`(原厂 boot.img 路径，给了才出 boot.img)、`KERNEL_RELEASE`/`BUILD_TIMESTAMP`(伪装版本号)、`SRC_OWNER`(用你 fork 的源码就填你的用户名)、`SUSFS_REF`(回退 v2.2.0 填 `f37930f374ef88de990d6abea0c67d0ea28c1edc`)、`KSU_REF`、`NOMOUNT_REF`、`BBG_REF`、`JOBS`(并行度，默认全部核心)、`BLOCK_MODULES`。
 
-常用环境变量：`SCHEME`(A/B/both，必填)、`STOCK_BOOT`(原厂 boot.img 路径，给了才出 boot.img)、`KERNEL_RELEASE`/`BUILD_TIMESTAMP`(伪装版本号)、`SRC_OWNER`(用你 fork 的源码就填你的用户名)、`SUSFS_REF`(回退 v2.2.0 填 `f37930f374ef88de990d6abea0c67d0ea28c1edc`)、`JOBS`(并行度)。
+想先看看上游现在是什么版本：`./scripts/upstream.sh`。
 
-产物同样在 `dist/`：`AnyKernel3_*.zip`、`boot_*.img`、`Image_*`、`build-info.txt`。第一次会下约 1.5GB 工具链、占约 25GB 磁盘。重复跑脚本会复用已下载的工具链和源码（要全新来就删掉 `work/`）。
+产物在 `dist/`：`AnyKernel3_*.zip`、`boot_*.img`、`Image_*`、`build-info_schemeA.txt`、`kernel_schemeA.config`。第一次会下约 1.5GB 工具链、占约 25GB 磁盘；重复跑会复用已下载的工具链和源码（全新来就删掉 `work/`）。
+
+### 关于下载慢
+
+工具链（约 1GB）从 CodeLinaro 下，速度由对方服务器决定，几 MB/s 是它的限速，换多线程下载器也快不了，所以脚本就用默认 curl。能省时间的是**共享缓存**：工具链、SUSFS、AnyKernel3、magiskboot 都存到 `work/_cache`，**同一个文件只下一次**，之后重复编直接复用，所以慢的只有第一次。想全新重下就删掉 `work/_cache`。
 
 ## 刷机
 
@@ -117,13 +165,7 @@ STOCK_BOOT=~/boot_stock.img \
    - `cat /proc/sys/net/ipv4/tcp_congestion_control` 显示 `bbr`
    - `iptables -t mangle -A POSTROUTING -j TTL --ttl-set 64` 不报错
    - `ipset create test hash:ip` 不报错（测完 `ipset destroy test`）
-   - 方案 A：`zcat /proc/config.gz | grep NOMOUNT` 显示 `=y`
+   - `zcat /proc/config.gz | grep NOMOUNT` 显示 `=y`
 4. 装 SUSFS 用户态模块（sidex15 `ksu_module_susfs`）
-5. KernelSU v3 仍然需要一个元模块来挂载其他模块（挂载逻辑在用户态，没法编进内核）：
-   - 方案 A：装 NoMount 元模块，它会直接用内核里编好的 NoMount，不再加载自己的 LKM
-   - 方案 B：装 KernelSU 的 OverlayFS 元模块
+5. KernelSU v3 仍然需要一个元模块来挂载其他模块（挂载逻辑在用户态，没法编进内核）：装 NoMount 元模块，它会直接用内核里编好的 NoMount，不再加载自己的 LKM
 6. 再逐个加其他模块；打开 Chase 等 App 挂几分钟确认不重启，崩了看 `/sys/fs/pstore`
-
-## 说明
-
-这套流程没有实际在一加 15 上编过、刷过。第一次运行如果失败，看 Actions 日志里红色的 `::error::` 行，最常见的是补丁冲突和 Kconfig 选项名不对。

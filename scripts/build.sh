@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # OnePlus 15 (SM8850) GKI kernel: 6.12.58 + KernelSU + SUSFS v2.2.0 + BBG + TTL + IP_SET + BBR default
-# SCHEME=A -> for NoMount (SUSFS OPEN_REDIRECT off)
-# SCHEME=B -> for OverlayFS (SUSFS OPEN_REDIRECT on)
+# Scheme A only: NoMount built in, SUSFS OPEN_REDIRECT off (scheme B / OverlayFS was dropped)
 set -euo pipefail
 
-: "${SCHEME:?SCHEME must be A or B}"
+: "${SCHEME:=A}"
 : "${SRC_OWNER:=OnePlusOSS}"
 : "${KSU_REF:=main}"
 : "${SUSFS_REF:=gki-android16-6.12}"
@@ -13,7 +12,7 @@ set -euo pipefail
 : "${KERNEL_RELEASE:=}"
 : "${BUILD_TIMESTAMP:=}"
 
-case "$SCHEME" in A|B) ;; *) echo "::error::SCHEME must be A or B"; exit 1 ;; esac
+[ "$SCHEME" = A ] || { echo "::error::only scheme A (NoMount) is supported"; exit 1; }
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$REPO_DIR/work"
@@ -213,11 +212,7 @@ for o in KSU KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTA
          IP_SET IP_SET_HASH_IP IP_SET_HASH_NET IP_SET_HASH_IPPORT IP_SET_BITMAP_IP NETFILTER_XT_SET \
          OVERLAY_FS CFI_CLANG SHADOW_CALL_STACK; do need_y "$o"; done
 need_n KSU_SUSFS_ENABLE_LOG
-if [ "$SCHEME" = A ]; then
-  need_n KSU_SUSFS_OPEN_REDIRECT; need_y NOMOUNT
-else
-  need_y KSU_SUSFS_OPEN_REDIRECT
-fi
+need_n KSU_SUSFS_OPEN_REDIRECT; need_y NOMOUNT
 grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' out/.config || { echo "::error::default TCP congestion is not bbr"; fail=1; }
 grep -q 'baseband_guard' <(grep '^CONFIG_LSM=' out/.config) || { echo "::error::baseband_guard missing from CONFIG_LSM"; fail=1; }
 [ $fail -eq 0 ] || exit 1
@@ -296,7 +291,7 @@ fi
 
 group "Build info"
 cat > "$DIST/build-info_scheme$SCHEME.txt" <<EOF
-scheme          : $SCHEME ($([ "$SCHEME" = A ] && echo "NoMount, SUSFS OPEN_REDIRECT off" || echo "OverlayFS, SUSFS OPEN_REDIRECT on"))
+scheme          : A (NoMount, SUSFS OPEN_REDIRECT off)
 kernelrelease   : $KREL
 source          : $SRC_OWNER/android_kernel_common_oneplus_sm8850 @ $SRC_COMMIT
 source commit   : $SRC_SUBJECT

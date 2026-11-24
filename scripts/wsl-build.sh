@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-# OnePlus 15 (SM8850) GKI 内核 本地 WSL 编译脚本
+# OnePlus 15 (SM8850) GKI 内核 本地编译脚本(WSL 和任何 x86_64 Linux 通用)
 #   6.12.58 + KernelSU(官方 main) + SUSFS + BBG + TTL + IP_SET + 默认 BBR
-#   方案 A = NoMount 编进内核(SUSFS OPEN_REDIRECT 关)
-#   方案 B = OverlayFS 内置     (SUSFS OPEN_REDIRECT 开)
+#   只编方案 A = NoMount 编进内核(SUSFS OPEN_REDIRECT 关);方案 B 已移除
 #
-# 和云端 GitHub Actions 用的是同一套逻辑。
+# 和云端 GitHub Actions 用的是同一套逻辑。其他发行版的依赖包名见 README。
 #
-# ---- 需要的系统(建议 Ubuntu 22.04 / 24.04 的 WSL)----
+# ---- 需要的系统(Ubuntu/Debian 示例,WSL 同样适用)----
 # 一次性安装依赖:
 #   sudo apt-get update
 #   sudo apt-get install -y --no-install-recommends \
@@ -18,14 +17,9 @@
 #
 # ---- 用法 ----
 #   chmod +x scripts/wsl-build.sh
-#   # 只编方案 A:
-#   SCHEME=A ./scripts/wsl-build.sh
-#   # 编方案 B,并把结果打进原厂 boot.img:
-#   SCHEME=B STOCK_BOOT=~/boot_stock.img ./scripts/wsl-build.sh
-#   # A、B 两套一次编完(各用独立源码目录,产物都进 dist/):
-#   SCHEME=both STOCK_BOOT=~/boot_stock.img ./scripts/wsl-build.sh
+#   # 编方案 A,并把结果打进原厂 boot.img:
+#   STOCK_BOOT=~/boot_stock.img ./scripts/wsl-build.sh
 #   # 伪装成原厂版本号(强烈建议,过版本号检测):
-#   SCHEME=A \
 #   KERNEL_RELEASE='6.12.58-android16-6-g925a103d123c-ab15898589-4k' \
 #   BUILD_TIMESTAMP='Mon Jul 20 17:37:05 UTC 2026' \
 #   STOCK_BOOT=~/boot_stock.img \
@@ -40,14 +34,14 @@
 #     build-info.txt     版本信息
 #
 # ⚠ 重要:
-#   * 必须在 WSL 的 Linux 文件系统里跑(比如 ~/op15),不要放在 /mnt/c 下,
-#     否则软链接、权限和速度都会出问题。
+#   * WSL 下必须在 Linux 文件系统里跑(比如 ~/op15),不要放在 /mnt/c 下,
+#     否则软链接、权限和速度都会出问题。普通 Linux 放哪里都行(ext4/btrfs/xfs)。
 #   * 第一次会下载约 1.5GB 工具链 + 克隆源码,占用约 25GB 磁盘,留足空间。
 # =============================================================================
 set -euo pipefail
 
 # -------- 参数(都可以用环境变量覆盖)--------
-: "${SCHEME:?必须指定 SCHEME=A、B 或 both}"
+: "${SCHEME:=A}"                              # 只支持方案 A
 : "${SRC_OWNER:=OnePlusOSS}"                 # 改成你的 GitHub 用户名可用你 fork 的源码
 : "${KSU_REF:=main}"                          # KernelSU 版本(main=最新)
 : "${SUSFS_REF:=gki-android16-6.12}"          # SUSFS 分支/提交(v2.2.0=f37930f374ef88de990d6abea0c67d0ea28c1edc)
@@ -58,20 +52,10 @@ set -euo pipefail
 : "${STOCK_BOOT:=}"                           # 原厂 boot.img 路径(空=不打包 boot.img)
 : "${JOBS:=$(nproc)}"                         # 并行度
 
-case "$SCHEME" in A|B|both) ;; *) echo "SCHEME 只能是 A、B 或 both"; exit 1 ;; esac
+[ "$SCHEME" = A ] || { echo "只支持方案 A(NoMount),方案 B 已移除"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-# SCHEME=both: 依次编 A 和 B(各用独立源码目录,互不干扰),产物都进同一个 dist/
-if [ "$SCHEME" = both ]; then
-  echo "==> 依次编译方案 A 和 B"
-  SCHEME=A "$0"
-  SCHEME=B "$0"
-  echo "==> A、B 两套都编完,产物在 $REPO_DIR/dist"
-  ls -la "$REPO_DIR/dist"
-  exit 0
-fi
 
 SRC_BRANCH="oneplus/sm8850_b_16.0.0_oneplus_15"
 MANIFEST_URL="https://raw.githubusercontent.com/OnePlusOSS/kernel_manifest/oneplus/sm8850/oneplus_15.xml"
@@ -288,7 +272,7 @@ for o in KSU KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTA
          BBG TCP_CONG_BBR DEFAULT_BBR NETFILTER_XT_TARGET_HL IP_NF_TARGET_TTL IP6_NF_TARGET_HL \
          IP_SET IP_SET_HASH_IP IP_SET_HASH_NET IP_SET_HASH_IPPORT IP_SET_BITMAP_IP NETFILTER_XT_SET \
          OVERLAY_FS CFI_CLANG SHADOW_CALL_STACK; do need_y "$o"; done
-if [ "$SCHEME" = A ]; then need_n KSU_SUSFS_OPEN_REDIRECT; need_y NOMOUNT; else need_y KSU_SUSFS_OPEN_REDIRECT; fi
+need_n KSU_SUSFS_OPEN_REDIRECT; need_y NOMOUNT
 grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' out/.config || { echo "❌ 默认 TCP 拥塞不是 bbr"; fail=1; }
 [ $fail -eq 0 ] || { echo "配置校验失败,停止"; exit 1; }
 
@@ -369,7 +353,7 @@ if [ -n "$STOCK_BOOT" ] && [ -f "$STOCK_BOOT" ]; then
 fi
 
 cat > "$DIST/build-info_scheme$SCHEME.txt" <<EOF
-scheme          : $SCHEME ($([ "$SCHEME" = A ] && echo "NoMount 内置, SUSFS OPEN_REDIRECT 关" || echo "OverlayFS 内置, SUSFS OPEN_REDIRECT 开"))
+scheme          : A (NoMount 内置, SUSFS OPEN_REDIRECT 关)
 kernelrelease   : $KREL
 source          : $SRC_OWNER @ $SRC_COMMIT
                   $SRC_SUBJECT
